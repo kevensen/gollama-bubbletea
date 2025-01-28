@@ -6,9 +6,13 @@ import (
 	"log"
 	"os"
 
-	tea "github.com/charmbracelet/bubbletea"
 	"github.com/kevensen/gollama-bubbletea/internal/bot"
+	"github.com/kevensen/gollama-bubbletea/internal/tools"
+	_ "github.com/kevensen/gollama-bubbletea/internal/tools/adder"
+	_ "github.com/kevensen/gollama-bubbletea/internal/tools/motd"
 	"github.com/kevensen/gollama-bubbletea/internal/tui"
+
+	tea "github.com/charmbracelet/bubbletea"
 )
 
 func main() {
@@ -36,7 +40,7 @@ func main() {
 
 	ollamaAddr := *ollamaHost + ":" + *ollamaPort
 
-	b, err := bot.NewBot(ctx, ollamaAddr, *ollamaModel)
+	b, err := bot.NewBot(ctx, ollamaAddr, *ollamaModel, tools.Registered())
 	if err != nil {
 		log.Fatalf("Failed to create bot: %v", err)
 	}

@@ -3,95 +3,76 @@ package bot
 import (
 	"context"
 	"fmt"
-	"net/http"
-	"net/url"
-	"slices"
 
-	"github.com/ollama/ollama/api"
+	"github.com/kevensen/gollama-bubbletea/internal/bot/messages"
+	"github.com/kevensen/gollama-bubbletea/internal/bot/models"
+	"github.com/kevensen/gollama-bubbletea/internal/tools"
+
+	"github.com/parakeet-nest/parakeet/completion"
+	"github.com/parakeet-nest/parakeet/enums/option"
+	"github.com/parakeet-nest/parakeet/llm"
 )
 
 type Bot struct {
-	ollamaClient *api.Client
-	model        string
-	messages     []api.Message
+	ollamaUrl      string
+	ToolManager    *tools.ToolManager
+	MessageManager *messages.Manager
+	ModelManager   *models.Manager
 }
 
-func NewBot(ctx context.Context, apiEndpoint string, model string) (*Bot, error) {
-	u, err := url.Parse(apiEndpoint)
-	if err != nil {
-		return nil, err
+func NewBot(ctx context.Context, apiEndpoint string, initialModel string, ts map[string]tools.CallableTool) (*Bot, error) {
+	b := &Bot{
+		ollamaUrl: apiEndpoint,
 	}
-	oc := api.NewClient(u, http.DefaultClient)
-	b := &Bot{ollamaClient: oc, model: model, messages: make([]api.Message, 0)}
 
-	if err := b.UseModel(ctx, model); err != nil {
-		return nil, fmt.Errorf("failed to use model: %v", err)
+	b.ToolManager = tools.NewToolManager(ts)
+	b.MessageManager = messages.NewManager()
+
+	modelManager, err := models.NewManager(apiEndpoint, initialModel)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create model manager: %v", err)
 	}
+
+	b.ModelManager = modelManager
 
 	return b, nil
 }
 
-func (b *Bot) SendMessage(ctx context.Context, role, message string, respFunc api.ChatResponseFunc) error {
-	b.AddMessage(role, message)
-	req := &api.ChatRequest{Model: b.model, Messages: b.messages}
+func (b *Bot) SendMessage(ctx context.Context, role, message string, toolsEnabled bool) (*llm.Answer, error) {
+	var msgsForSending []llm.Message
+	var err error
+	msg := llm.Message{Role: role, Content: message}
 
-	// Assuming ollamaClient has a method Send that takes the endpoint and data
-	err := b.ollamaClient.Chat(ctx, req, respFunc)
-	if err != nil {
-		return err
+	msgsForSending, err = b.MessageManager.MessagesForSending()
+	msgsForSending = append(msgsForSending, msg)
+
+	query := llm.Query{
+		Model:    b.ModelManager.CurrentModel(),
+		Messages: msgsForSending,
+		Options: llm.SetOptions(map[string]interface{}{
+			option.Temperature:   0.5,
+			option.RepeatLastN:   2,
+			option.RepeatPenalty: 2.0,
+			option.Verbose:       false,
+		}),
 	}
 
-	return nil
-}
+	if toolsEnabled {
+		query.Options.Temperature = 0.0
+		query.Format = "json"
+		query.Tools = b.ToolManager.LLMTools()
+	}
+	b.MessageManager.AddMessage(msg)
 
-func (b *Bot) AddMessage(role, message string) {
-	b.messages = append(b.messages, api.Message{Content: message, Role: role})
-}
-
-func (b *Bot) RenderMessages() []api.Message {
-	return b.messages
-}
-
-func (b *Bot) MessageLen() int {
-	return len(b.messages)
-}
-
-func (b *Bot) Models(ctx context.Context) ([]string, error) {
-	resp, err := b.ollamaClient.List(ctx)
+	var ans llm.Answer
+	ans, err = completion.Chat(b.ollamaUrl, query)
 	if err != nil {
 		return nil, err
 	}
 
-	models := make([]string, len(resp.Models))
-	for i, m := range resp.Models {
-		models[i] = m.Name
-	}
-	return models, nil
+	return &ans, nil
 }
 
-func (b *Bot) CurrentModel() string {
-	return b.model
-}
-
-func (b *Bot) UseModel(ctx context.Context, model string) error {
-	ms, err := b.Models(ctx)
-	if err != nil {
-		return fmt.Errorf("failed to get models: %v", err)
-	}
-
-	if !slices.Contains(ms, model) {
-		return fmt.Errorf("model not found: %s", model)
-	}
-
-	b.model = model
-	return nil
-}
-
-func (b *Bot) ModelExists(ctx context.Context, model string) (bool, error) {
-	ms, err := b.Models(ctx)
-	if err != nil {
-		return false, fmt.Errorf("failed to get models: %v", err)
-	}
-
-	return slices.Contains(ms, model), nil
+func (b *Bot) MessageLen() int {
+	return b.MessageManager.Len()
 }

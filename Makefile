@@ -7,7 +7,7 @@ build:
 		go build -o bin/gollama cmd/main.go
 
 clean:
-		rm -rf bin/gollama internal/tools/motd/plugin.wasm
+		rm -rf bin/gollama
 
 run: build
 		bin/gollama -ollama_host=http://127.0.0.1 -ollama_port=11434

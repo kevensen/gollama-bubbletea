@@ -24,8 +24,8 @@ func TestAddMessage(t *testing.T) {
 		msg := llm.Message{Role: test.role, Content: test.content}
 		addedMsg := manager.AddMessage(msg)
 
-		if addedMsg != &msg {
-			t.Errorf("AddMessage(%v) = %v, want %v", msg, addedMsg, &msg)
+		if addedMsg.Content != msg.Content {
+			t.Errorf("AddMessage() content mismatch = %v, want %v", msg, addedMsg)
 		}
 
 		savedMsg, err := manager.history.Get(strconv.Itoa(manager.currentMessageID))

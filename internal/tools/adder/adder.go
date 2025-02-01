@@ -43,14 +43,14 @@ type Tool struct {
 	name string
 }
 
-func (Tool) Call(args map[string]interface{}) (string, error) {
+func (Tool) Call(args map[string]any) (string, error) {
 	a := args["a"].(float64)
 	b := args["b"].(float64)
 	sum := a + b
 	return fmt.Sprintf("%f", sum), nil
 }
 
-func addInterfaces(ifaces []interface{}) float64 {
+func addInterfaces(ifaces []any) float64 {
 	var sum float64
 	for _, v := range ifaces {
 		if _, ok := v.(float64); ok {
@@ -61,8 +61,8 @@ func addInterfaces(ifaces []interface{}) float64 {
 			sum += float64(v.(int))
 		}
 
-		if _, ok := v.([]interface{}); ok {
-			sum += addInterfaces(v.([]interface{}))
+		if _, ok := v.([]any); ok {
+			sum += addInterfaces(v.([]any))
 		}
 	}
 	return sum

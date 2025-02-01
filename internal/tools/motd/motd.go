@@ -40,7 +40,7 @@ type MOTDTool struct {
 	name     string
 }
 
-func (MOTDTool) Call(map[string]interface{}) (string, error) {
+func (MOTDTool) Call(map[string]any) (string, error) {
 	greeting := messages[rand.Intn(len(messages))]
 	return greeting, nil
 }

@@ -61,7 +61,7 @@ func New(b *bot.Bot) *model {
 
 	vp := viewport.New(30, 5)
 	vp.SetContent(`Welcome to Gollama-Chat!
-Type a message and press Enter to send.` + ascii + "\n\n Use the Tab key to switch between the models and tools viewports.")
+Type a message and press Enter to send.` + ascii + "\n\n Use the Tab key to switch between the models and tools viewports.  Use ctrl+c or esc to quit.")
 
 	vp.Style = lipgloss.NewStyle().
 		BorderStyle(lipgloss.RoundedBorder()).
@@ -280,6 +280,9 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.updateModelsViewportContent()
 				m.updateToolsViewportContent()
 			} else if m.textarea.Value() != "" {
+				if m.textarea.Value() == "exit" {
+					return m, tea.Quit
+				}
 				m.viewport.SetContent(lipgloss.NewStyle().Width(m.viewport.Width).Render(strings.Join(m.bot.MessageManager.StyledMessages(), "\n")))
 				ctx := context.Background()
 				ans, err := m.bot.SendMessage(ctx, "user", m.textarea.Value(), m.toolsEnabled)

@@ -8,7 +8,7 @@ import (
 var registered map[string]CallableTool
 
 type CallableTool interface {
-	Call(map[string]interface{}) (string, error)
+	Call(map[string]any) (string, error)
 	LLMTool() llm.Tool
 	Name() string
 }
@@ -28,7 +28,7 @@ func Registered() map[string]CallableTool {
 
 type EmptyTool struct{}
 
-func (e EmptyTool) Call(map[string]interface{}) (string, error) {
+func (e EmptyTool) Call(map[string]any) (string, error) {
 	return "", nil
 }
 

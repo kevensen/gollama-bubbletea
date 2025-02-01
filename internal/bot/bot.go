@@ -49,7 +49,7 @@ func (b *Bot) SendMessage(ctx context.Context, role, message string, toolsEnable
 	query := llm.Query{
 		Model:    b.ModelManager.CurrentModel(),
 		Messages: msgsForSending,
-		Options: llm.SetOptions(map[string]interface{}{
+		Options: llm.SetOptions(map[string]any{
 			option.Temperature:   0.5,
 			option.RepeatLastN:   2,
 			option.RepeatPenalty: 2.0,

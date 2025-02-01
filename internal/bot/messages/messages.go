@@ -88,7 +88,7 @@ func (m *Manager) StyledMessages() []string {
 
 		roleStyled = lipgloss.NewStyle().Foreground(c).Render(role)
 		msgStyled := roleStyled + ": " + msg.Content
-		messages = append(messages, msgStyled, "\n")
+		messages = append(messages, msgStyled)
 	}
 	return messages
 }

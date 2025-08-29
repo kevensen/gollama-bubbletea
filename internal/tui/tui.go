@@ -78,6 +78,7 @@ type model struct {
 	selectedModel  int
 	activeTab      tab
 	tabs           []string
+	ragEnabled     bool // RAG enable/disable state
 }
 
 func New(b *bot.Bot) *model {
@@ -98,7 +99,7 @@ func New(b *bot.Bot) *model {
 
 	vp := viewport.New(30, 5)
 	vp.SetContent(`Welcome to Gollama-Chat!
-Type a message and press Enter to send.` + ascii + "\n\n Use the Tab key to switch between Chat, Models, and RAG tabs.\n Use Ctrl+T to focus the input field for commands from any tab.\n Special commands: /clear (clear history), /chat (chat tab), /models (models tab), /rag (rag tab), /exit (quit)\n Use ctrl+c or esc to quit.")
+Type a message and press Enter to send.` + ascii + "\n\n Use the Tab key to switch between Chat, Models, and RAG tabs.\n Use Ctrl+T to focus the input field for commands from any tab.\n Special commands: /clear (clear history), /chat (chat tab), /models (models tab), /rag (rag tab), /exit or /quit (quit)\n Key bindings: Ctrl+U (clear input), Ctrl+A (start), Ctrl+E (end)\n Use ctrl+c or esc to quit.")
 
 	vp.Style = lipgloss.NewStyle().
 		BorderStyle(lipgloss.RoundedBorder()).
@@ -111,8 +112,6 @@ Type a message and press Enter to send.` + ascii + "\n\n Use the Tab key to swit
 		BorderForeground(greenColor) // Green border to match tab
 
 	ragVp := viewport.New(20, 5)
-	ragVp.SetContent("RAG Settings\n\nComing Soon...\n\nControls:\nTab - Switch to Chat")
-
 	ragVp.Style = lipgloss.NewStyle().
 		BorderStyle(lipgloss.RoundedBorder()).
 		BorderForeground(lipgloss.Color("1")) // Red border
@@ -131,6 +130,7 @@ Type a message and press Enter to send.` + ascii + "\n\n Use the Tab key to swit
 		selectedModel:  0,
 		activeTab:      chatTab,
 		tabs:           []string{"Chat", "Models", "RAG"},
+		ragEnabled:     false, // RAG starts disabled
 	}
 }
 
@@ -147,8 +147,13 @@ func (m *model) handleChatResponse(resp llm.Answer) error {
 
 func (m *model) updateTabNames() {
 	currentModel := m.bot.ModelManager.CurrentModel()
+	ragStatus := "Disabled"
+	if m.ragEnabled {
+		ragStatus = "Enabled"
+	}
 	m.tabs[0] = "Chat"
 	m.tabs[1] = "Models: " + currentModel
+	m.tabs[2] = "RAG: " + ragStatus
 }
 
 func (m *model) Init() tea.Cmd {
@@ -160,6 +165,7 @@ func (m *model) fetchModels() tea.Msg {
 	m.models = models
 	m.updateTabNames()
 	m.updateModelsViewportContent()
+	m.updateRAGViewportContent()
 	return nil
 }
 
@@ -184,6 +190,32 @@ func (m *model) updateModelsViewportContent() {
 	styledModels = append(styledModels, "", "Controls:", "↑/↓ - Navigate", "Enter - Select Model", "Tab - Switch to Chat")
 
 	m.modelsViewport.SetContent(strings.Join(styledModels, "\n"))
+}
+
+func (m *model) updateRAGViewportContent() {
+	statusColor := "1"  // Red for disabled
+	statusText := "DISABLED"
+	toggleText := "Press Enter to Enable"
+	
+	if m.ragEnabled {
+		statusColor = "2"  // Green for enabled
+		statusText = "ENABLED"
+		toggleText = "Press Enter to Disable"
+	}
+	
+	content := []string{
+		"RAG Settings",
+		"",
+		"Status: " + lipgloss.NewStyle().Foreground(lipgloss.Color(statusColor)).Bold(true).Render(statusText),
+		"",
+		toggleText,
+		"",
+		"Controls:",
+		"Enter - Toggle RAG On/Off",
+		"Tab - Switch to Chat",
+	}
+	
+	m.ragViewport.SetContent(strings.Join(content, "\n"))
 }
 
 func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -246,6 +278,7 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.textarea.Focus()
 			}
 			m.updateModelsViewportContent()
+			m.updateRAGViewportContent()
 		case "ctrl+t":
 			// Switch focus to textarea for command input (works from any tab)
 			if m.focus != focusTextarea {
@@ -292,6 +325,11 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					}
 					m.updateTabNames()
 					m.updateModelsViewportContent()
+				} else if m.activeTab == ragTab && m.focus == focusRAGViewport {
+					// Toggle RAG enabled/disabled
+					m.ragEnabled = !m.ragEnabled
+					m.updateTabNames()
+					m.updateRAGViewportContent()
 				}
 				return m, nil
 			}
@@ -306,7 +344,7 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 					// Handle valid commands
 					switch input {
-					case "/exit":
+					case "/exit", "/quit":
 						return m, tea.Quit
 					case "/chat":
 						m.activeTab = chatTab
@@ -327,7 +365,7 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 						if m.activeTab == chatTab {
 							m.bot.ClearMessages()
 							m.viewport.SetContent(`Welcome to Gollama-Chat!
-Type a message and press Enter to send.` + ascii + "\n\n Use the Tab key to switch between Chat, Models, and RAG tabs.\n Use Ctrl+T to focus the input field for commands from any tab.\n Special commands: /clear (clear history), /chat (chat tab), /models (models tab), /rag (rag tab), /exit (quit)\n Use ctrl+c or esc to quit.")
+Type a message and press Enter to send.` + ascii + "\n\n Use the Tab key to switch between Chat, Models, and RAG tabs.\n Use Ctrl+T to focus the input field for commands from any tab.\n Special commands: /clear (clear history), /chat (chat tab), /models (models tab), /rag (rag tab), /exit or /quit (quit)\n Key bindings: Ctrl+U (clear input), Ctrl+A (start), Ctrl+E (end)\n Use ctrl+c or esc to quit.")
 							m.textarea.Reset()
 							return m, nil
 						} else {
@@ -367,6 +405,21 @@ Type a message and press Enter to send.` + ascii + "\n\n Use the Tab key to swit
 						m.viewport.GotoBottom()
 					}
 				}
+			}
+		case "ctrl+u":
+			// Clear text before cursor (like bash)
+			if m.focus == focusTextarea {
+				m.textarea.SetValue("")
+			}
+		case "ctrl+a":
+			// Go to beginning of text (like bash)
+			if m.focus == focusTextarea {
+				m.textarea.SetCursor(0)
+			}
+		case "ctrl+e":
+			// Go to end of text (like bash)
+			if m.focus == focusTextarea {
+				m.textarea.SetCursor(len(m.textarea.Value()))
 			}
 		case "ctrl+c", "esc":
 			return m, tea.Quit

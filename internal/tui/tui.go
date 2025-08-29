@@ -9,6 +9,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/kevensen/gollama-bubbletea/internal/bot"
+	"github.com/kevensen/gollama-bubbletea/internal/settings"
 	"github.com/parakeet-nest/parakeet/llm"
 )
 
@@ -79,9 +80,17 @@ type model struct {
 	activeTab      tab
 	tabs           []string
 	ragEnabled     bool // RAG enable/disable state
+	settings       *settings.Settings
 }
 
 func New(b *bot.Bot) *model {
+	// Load settings
+	appSettings, err := settings.Load()
+	if err != nil {
+		// If settings can't be loaded, use defaults
+		appSettings = settings.DefaultSettings()
+	}
+
 	ta := textarea.New()
 	ta.Placeholder = "Send a message..."
 	ta.Focus()
@@ -118,6 +127,15 @@ Type a message and press Enter to send.` + ascii + "\n\n Use the Tab key to swit
 
 	ta.KeyMap.InsertNewline.SetEnabled(false)
 
+	// Apply saved last model if it exists and is valid
+	if appSettings.LastModel != "" {
+		err := b.ModelManager.UseModel(appSettings.LastModel)
+		if err != nil {
+			// If saved model is invalid, keep default but don't error
+			appSettings.LastModel = b.ModelManager.CurrentModel()
+		}
+	}
+
 	return &model{
 		textarea:       ta,
 		viewport:       vp,
@@ -130,7 +148,8 @@ Type a message and press Enter to send.` + ascii + "\n\n Use the Tab key to swit
 		selectedModel:  0,
 		activeTab:      chatTab,
 		tabs:           []string{"Chat", "Models", "RAG"},
-		ragEnabled:     false, // RAG starts disabled
+		ragEnabled:     appSettings.RAGEnabled, // Load RAG state from settings
+		settings:       appSettings,
 	}
 }
 
@@ -193,16 +212,16 @@ func (m *model) updateModelsViewportContent() {
 }
 
 func (m *model) updateRAGViewportContent() {
-	statusColor := "1"  // Red for disabled
+	statusColor := "1" // Red for disabled
 	statusText := "DISABLED"
 	toggleText := "Press Enter to Enable"
-	
+
 	if m.ragEnabled {
-		statusColor = "2"  // Green for enabled
+		statusColor = "2" // Green for enabled
 		statusText = "ENABLED"
 		toggleText = "Press Enter to Disable"
 	}
-	
+
 	content := []string{
 		"RAG Settings",
 		"",
@@ -214,7 +233,7 @@ func (m *model) updateRAGViewportContent() {
 		"Enter - Toggle RAG On/Off",
 		"Tab - Switch to Chat",
 	}
-	
+
 	m.ragViewport.SetContent(strings.Join(content, "\n"))
 }
 
@@ -322,12 +341,17 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					if err != nil {
 						msg := llm.Message{Role: "error", Content: err.Error()}
 						m.bot.MessageManager.AddMessage(msg)
+					} else {
+						// Save the selected model to settings
+						m.settings.SetLastModel(selectedModel)
 					}
 					m.updateTabNames()
 					m.updateModelsViewportContent()
 				} else if m.activeTab == ragTab && m.focus == focusRAGViewport {
 					// Toggle RAG enabled/disabled
 					m.ragEnabled = !m.ragEnabled
+					// Save RAG state to settings
+					m.settings.SetRAGEnabled(m.ragEnabled)
 					m.updateTabNames()
 					m.updateRAGViewportContent()
 				}

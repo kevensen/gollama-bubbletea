@@ -10,7 +10,7 @@ on:
 jobs:
 
   build:
-    runs-on: arm-standard
+    runs-on: ubuntu-latest
     permissions:
       contents: write
       actions: read

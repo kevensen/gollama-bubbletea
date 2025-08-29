@@ -10,4 +10,4 @@ clean:
 		rm -rf bin/gollama
 
 run: build
-		bin/gollama -ollama_host=http://127.0.0.1 -ollama_port=11434
+		bin/gollama 	-ollama_port=11434

@@ -59,14 +59,31 @@ func (m *Manager) Len() int {
 	return len(m.history.Messages)
 }
 
+func (m *Manager) Clear() {
+	m.currentMessageID = 0
+	m.history.Messages = make(map[string]llm.MessageRecord)
+}
+
 func (m *Manager) StyledMessages() []string {
 	var messages []string
 	var roleStyled string
 
 	keys := maps.Keys(m.history.Messages)
-	slices.Sort(keys)
 
-	for _, key := range keys {
+	// Convert string keys to integers for proper numerical sorting
+	intKeys := make([]int, len(keys))
+	for i, key := range keys {
+		intKey, err := strconv.Atoi(key)
+		if err != nil {
+			panic(err)
+		}
+		intKeys[i] = intKey
+	}
+	slices.Sort(intKeys)
+
+	// Convert back to strings and process messages in correct order
+	for _, intKey := range intKeys {
+		key := strconv.Itoa(intKey)
 		msg, err := m.history.Get(key)
 		if err != nil {
 			// Don't panic, heh

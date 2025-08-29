@@ -30,10 +30,13 @@ var (
 	activeTabBorder        = tabBorderWithBottom("┘", " ", "└")
 	highlightColor         = lipgloss.AdaptiveColor{Light: "#874BFD", Dark: "#7D56F4"}
 	greenColor             = lipgloss.AdaptiveColor{Light: "#00AA00", Dark: "#00FF00"}
+	redColor               = lipgloss.AdaptiveColor{Light: "#CC0000", Dark: "#FF4444"}
 	inactiveTabStyle       = lipgloss.NewStyle().Border(inactiveTabBorder, true).BorderForeground(highlightColor).Padding(0, 1)
 	activeTabStyle         = inactiveTabStyle.Border(activeTabBorder, true)
 	inactiveModelsTabStyle = lipgloss.NewStyle().Border(inactiveTabBorder, true).BorderForeground(greenColor).Padding(0, 1)
 	activeModelsTabStyle   = inactiveModelsTabStyle.Border(activeTabBorder, true)
+	inactiveRAGTabStyle    = lipgloss.NewStyle().Border(inactiveTabBorder, true).BorderForeground(redColor).Padding(0, 1)
+	activeRAGTabStyle      = inactiveRAGTabStyle.Border(activeTabBorder, true)
 )
 
 // Helper function
@@ -49,6 +52,7 @@ type focus int
 const (
 	focusTextarea focus = iota
 	focusModelsViewport
+	focusRAGViewport
 )
 
 type tab int
@@ -56,15 +60,18 @@ type tab int
 const (
 	chatTab tab = iota
 	modelsTab
+	ragTab
 )
 
 type model struct {
 	viewport       viewport.Model
 	modelsViewport viewport.Model
+	ragViewport    viewport.Model
 	textarea       textarea.Model
 	senderStyle    lipgloss.Style
 	bot            *bot.Bot
 	err            error
+	inputError     string // Error message for invalid commands or wrong tab input
 	responseBuffer string
 	focus          focus
 	models         []string
@@ -91,7 +98,7 @@ func New(b *bot.Bot) *model {
 
 	vp := viewport.New(30, 5)
 	vp.SetContent(`Welcome to Gollama-Chat!
-Type a message and press Enter to send.` + ascii + "\n\n Use the Tab key to switch between Chat and Models tabs.\n Special commands: /clear (clear history), /exit (quit)\n Use ctrl+c or esc to quit.")
+Type a message and press Enter to send.` + ascii + "\n\n Use the Tab key to switch between Chat, Models, and RAG tabs.\n Use Ctrl+T to focus the input field for commands from any tab.\n Special commands: /clear (clear history), /chat (chat tab), /models (models tab), /rag (rag tab), /exit (quit)\n Use ctrl+c or esc to quit.")
 
 	vp.Style = lipgloss.NewStyle().
 		BorderStyle(lipgloss.RoundedBorder()).
@@ -101,6 +108,13 @@ Type a message and press Enter to send.` + ascii + "\n\n Use the Tab key to swit
 
 	modelsVp.Style = lipgloss.NewStyle().
 		BorderStyle(lipgloss.RoundedBorder()).
+		BorderForeground(greenColor) // Green border to match tab
+
+	ragVp := viewport.New(20, 5)
+	ragVp.SetContent("RAG Settings\n\nComing Soon...\n\nControls:\nTab - Switch to Chat")
+
+	ragVp.Style = lipgloss.NewStyle().
+		BorderStyle(lipgloss.RoundedBorder()).
 		BorderForeground(lipgloss.Color("1")) // Red border
 
 	ta.KeyMap.InsertNewline.SetEnabled(false)
@@ -109,13 +123,14 @@ Type a message and press Enter to send.` + ascii + "\n\n Use the Tab key to swit
 		textarea:       ta,
 		viewport:       vp,
 		modelsViewport: modelsVp,
+		ragViewport:    ragVp,
 		senderStyle:    lipgloss.NewStyle().Foreground(lipgloss.Color("5")),
 		bot:            b,
 		err:            nil,
 		focus:          focusTextarea,
 		selectedModel:  0,
 		activeTab:      chatTab,
-		tabs:           []string{"Chat", "Models"},
+		tabs:           []string{"Chat", "Models", "RAG"},
 	}
 }
 
@@ -173,16 +188,18 @@ func (m *model) updateModelsViewportContent() {
 
 func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	var (
-		tiCmd tea.Cmd
-		vpCmd tea.Cmd
-		mvCmd tea.Cmd
+		tiCmd  tea.Cmd
+		vpCmd  tea.Cmd
+		mvCmd  tea.Cmd
+		ragCmd tea.Cmd
 	)
 
-	if m.focus == focusTextarea && m.activeTab == chatTab {
+	if m.focus == focusTextarea {
 		m.textarea, tiCmd = m.textarea.Update(msg)
 	}
 	m.viewport, vpCmd = m.viewport.Update(msg)
 	m.modelsViewport, mvCmd = m.modelsViewport.Update(msg)
+	m.ragViewport, ragCmd = m.ragViewport.Update(msg)
 
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
@@ -194,6 +211,7 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		m.viewport.Width = chatViewportWidth
 		m.modelsViewport.Width = modelsViewportWidth
+		m.ragViewport.Width = modelsViewportWidth
 		m.textarea.SetWidth(chatViewportWidth)
 
 		// Height calculations (accounting for tab header)
@@ -202,6 +220,7 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		m.viewport.Height = availableHeight
 		m.modelsViewport.Height = availableHeight
+		m.ragViewport.Height = availableHeight
 
 		if m.bot.MessageLen() > 0 {
 			// Wrap content before setting it.
@@ -212,16 +231,39 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		switch msg.String() {
 		case "tab":
 			// Switch between tabs
-			if m.activeTab == chatTab {
+			switch m.activeTab {
+			case chatTab:
 				m.activeTab = modelsTab
 				m.focus = focusModelsViewport
 				m.textarea.Blur()
-			} else {
+			case modelsTab:
+				m.activeTab = ragTab
+				m.focus = focusRAGViewport
+				m.textarea.Blur()
+			case ragTab:
 				m.activeTab = chatTab
 				m.focus = focusTextarea
 				m.textarea.Focus()
 			}
 			m.updateModelsViewportContent()
+		case "ctrl+t":
+			// Switch focus to textarea for command input (works from any tab)
+			if m.focus != focusTextarea {
+				m.focus = focusTextarea
+				m.textarea.Focus()
+			} else {
+				// Switch back to tab-specific focus
+				switch m.activeTab {
+				case chatTab:
+					m.focus = focusTextarea // Stay on textarea for chat
+				case modelsTab:
+					m.focus = focusModelsViewport
+					m.textarea.Blur()
+				case ragTab:
+					m.focus = focusRAGViewport
+					m.textarea.Blur()
+				}
+			}
 		case "up":
 			if m.activeTab == modelsTab && m.focus == focusModelsViewport && m.selectedModel > 0 {
 				m.selectedModel--
@@ -237,43 +279,94 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.viewport.ScrollDown(1)
 			}
 		case "enter":
-			if m.activeTab == modelsTab && m.focus == focusModelsViewport {
-				selectedModel := m.models[m.selectedModel]
-				err := m.bot.ModelManager.UseModel(selectedModel)
-				if err != nil {
-					msg := llm.Message{Role: "error", Content: err.Error()}
-					m.bot.MessageManager.AddMessage(msg)
-				}
-				m.updateTabNames()
-				m.updateModelsViewportContent()
-			} else if m.activeTab == chatTab && m.textarea.Value() != "" {
-				input := m.textarea.Value()
+			input := m.textarea.Value()
 
-				// Handle special commands
-				if input == "/exit" {
-					return m, tea.Quit
-				} else if input == "/clear" {
-					// Clear chat history and viewport
-					m.bot.ClearMessages()
-					m.viewport.SetContent(`Welcome to Gollama-Chat!
-Type a message and press Enter to send.` + ascii + "\n\n Use the Tab key to switch between Chat and Models tabs.\n Special commands: /clear (clear history), /exit (quit)\n Use ctrl+c or esc to quit.")
-					m.textarea.Reset()
-					return m, nil
+			// Handle tab-specific viewport interactions first (when not focused on textarea)
+			if m.focus != focusTextarea {
+				if m.activeTab == modelsTab && m.focus == focusModelsViewport {
+					selectedModel := m.models[m.selectedModel]
+					err := m.bot.ModelManager.UseModel(selectedModel)
+					if err != nil {
+						msg := llm.Message{Role: "error", Content: err.Error()}
+						m.bot.MessageManager.AddMessage(msg)
+					}
+					m.updateTabNames()
+					m.updateModelsViewportContent()
 				}
+				return m, nil
+			}
 
-				// Regular message handling
-				m.viewport.SetContent(lipgloss.NewStyle().Width(m.viewport.Width).Render(strings.Join(m.bot.MessageManager.StyledMessages(), "\n")))
-				ctx := context.Background()
-				ans, err := m.bot.SendMessage(ctx, "user", input)
-				if err != nil {
-					msg := llm.Message{Role: "error", Content: err.Error()}
-					m.bot.MessageManager.AddMessage(msg)
+			// Handle textarea input
+			if input != "" {
+				isCommand := strings.HasPrefix(input, "/")
+
+				if isCommand {
+					// Clear any existing error when processing a command
+					m.inputError = ""
+
+					// Handle valid commands
+					switch input {
+					case "/exit":
+						return m, tea.Quit
+					case "/chat":
+						m.activeTab = chatTab
+						m.textarea.Reset()
+						return m, nil
+					case "/models":
+						m.activeTab = modelsTab
+						m.updateTabNames()
+						m.updateModelsViewportContent()
+						m.textarea.Reset()
+						return m, nil
+					case "/rag":
+						m.activeTab = ragTab
+						m.textarea.Reset()
+						return m, nil
+					case "/clear":
+						// /clear only works on chat tab
+						if m.activeTab == chatTab {
+							m.bot.ClearMessages()
+							m.viewport.SetContent(`Welcome to Gollama-Chat!
+Type a message and press Enter to send.` + ascii + "\n\n Use the Tab key to switch between Chat, Models, and RAG tabs.\n Use Ctrl+T to focus the input field for commands from any tab.\n Special commands: /clear (clear history), /chat (chat tab), /models (models tab), /rag (rag tab), /exit (quit)\n Use ctrl+c or esc to quit.")
+							m.textarea.Reset()
+							return m, nil
+						} else {
+							// Invalid command on non-chat tab
+							m.inputError = "Command '/clear' is only available on the chat tab"
+							m.textarea.Reset()
+							return m, nil
+						}
+					default:
+						// Invalid command
+						m.inputError = "Invalid command: " + input
+						m.textarea.Reset()
+						return m, nil
+					}
+				} else {
+					// Non-command input
+					if m.activeTab != chatTab {
+						// Non-chat tab with non-command input
+						m.inputError = "Chat input detected. Please switch to the chat tab and press enter"
+						return m, nil // Don't clear textarea for this case
+					} else {
+						// Valid chat input - clear any existing error
+						m.inputError = ""
+
+						// Regular chat message handling
+						m.viewport.SetContent(lipgloss.NewStyle().Width(m.viewport.Width).Render(strings.Join(m.bot.MessageManager.StyledMessages(), "\n")))
+						ctx := context.Background()
+						ans, err := m.bot.SendMessage(ctx, "user", input)
+						if err != nil {
+							msg := llm.Message{Role: "error", Content: err.Error()}
+							m.bot.MessageManager.AddMessage(msg)
+						}
+						if ans != nil {
+							m.handleChatResponse(*ans)
+						}
+						m.textarea.Reset()
+						m.viewport.GotoBottom()
+					}
 				}
-				if ans != nil {
-					m.handleChatResponse(*ans)
-				}
-				m.textarea.Reset()
-				m.viewport.GotoBottom()
 			}
 		case "ctrl+c", "esc":
 			return m, tea.Quit
@@ -285,7 +378,7 @@ Type a message and press Enter to send.` + ascii + "\n\n Use the Tab key to swit
 		return m, nil
 	}
 
-	return m, tea.Batch(tiCmd, vpCmd, mvCmd)
+	return m, tea.Batch(tiCmd, vpCmd, mvCmd, ragCmd)
 }
 
 func (m *model) View() string {
@@ -302,6 +395,12 @@ func (m *model) View() string {
 				style = activeModelsTabStyle
 			} else {
 				style = inactiveModelsTabStyle
+			}
+		} else if i == 2 { // RAG tab - always red
+			if isActive {
+				style = activeRAGTabStyle
+			} else {
+				style = inactiveRAGTabStyle
 			}
 		} else { // Chat tab - purple/blue
 			if isActive {
@@ -332,14 +431,32 @@ func (m *model) View() string {
 	if m.activeTab == chatTab {
 		// Chat tab: show full-width chat viewport
 		content = m.viewport.View()
-	} else {
+	} else if m.activeTab == modelsTab {
 		// Models tab: show models viewport centered
 		content = lipgloss.NewStyle().
 			Align(lipgloss.Center).
 			Width(m.viewport.Width).
 			Render(m.modelsViewport.View())
+	} else { // RAG tab
+		// RAG tab: show RAG viewport centered
+		content = lipgloss.NewStyle().
+			Align(lipgloss.Center).
+			Width(m.viewport.Width).
+			Render(m.ragViewport.View())
 	}
 
-	// Combine tabs, content, and textarea
-	return tabRow + "\n" + content + gap + m.textarea.View()
+	// Handle error message display without affecting layout spacing
+	var errorDisplay string
+	var adjustedGap = gap
+	if m.inputError != "" {
+		errorStyle := lipgloss.NewStyle().
+			Foreground(lipgloss.Color("196")). // Red color
+			Bold(true).
+			Padding(0, 1)
+		errorDisplay = errorStyle.Render("⚠ "+m.inputError) + "\n"
+		adjustedGap = "\n" // Reduce gap since we're adding error message line
+	}
+
+	// Combine tabs, content, error message, and textarea
+	return tabRow + "\n" + content + adjustedGap + errorDisplay + m.textarea.View()
 }

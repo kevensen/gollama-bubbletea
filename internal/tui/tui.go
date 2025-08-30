@@ -68,6 +68,7 @@ const (
 	focusRAGViewport
 	focusSettingsViewport
 	focusURLInput
+	focusChromaDBInput
 )
 
 type tab int
@@ -80,27 +81,28 @@ const (
 )
 
 type model struct {
-	viewport         viewport.Model
-	modelsViewport   viewport.Model
-	ragViewport      viewport.Model
-	settingsViewport viewport.Model
-	textarea         textarea.Model
-	urlTextInput     textinput.Model // Text input for URL in settings
-	senderStyle      lipgloss.Style
-	bot              *bot.Bot
-	err              error
-	inputError       string // Error message for invalid commands or wrong tab input
-	responseBuffer   string
-	focus            focus
-	models           []string
-	selectedModel    int
-	activeTab        tab
-	tabs             []string
-	ragEnabled       bool // RAG enable/disable state
-	settings         *settings.Settings
-	connectionValid  bool   // Whether Ollama connection is valid
-	urlInput         string // Current URL being entered in settings
-	darkMode         bool   // Dark mode state
+	viewport          viewport.Model
+	modelsViewport    viewport.Model
+	ragViewport       viewport.Model
+	settingsViewport  viewport.Model
+	textarea          textarea.Model
+	urlTextInput      textinput.Model // Text input for URL in settings
+	chromaDBTextInput textinput.Model // Text input for ChromaDB URL in RAG tab
+	senderStyle       lipgloss.Style
+	bot               *bot.Bot
+	err               error
+	inputError        string // Error message for invalid commands or wrong tab input
+	responseBuffer    string
+	focus             focus
+	models            []string
+	selectedModel     int
+	activeTab         tab
+	tabs              []string
+	ragEnabled        bool // RAG enable/disable state
+	settings          *settings.Settings
+	connectionValid   bool   // Whether Ollama connection is valid
+	urlInput          string // Current URL being entered in settings
+	darkMode          bool   // Dark mode state
 }
 
 func New(b *bot.Bot) *model {
@@ -140,6 +142,15 @@ func New(b *bot.Bot) *model {
 	urlInput.Prompt = "URL: "
 	if appSettings.OllamaURL != "" {
 		urlInput.SetValue(appSettings.OllamaURL)
+	}
+
+	// Initialize ChromaDB text input for RAG tab
+	chromaDBInput := textinput.New()
+	chromaDBInput.Placeholder = "http://localhost:8000"
+	chromaDBInput.Width = 40
+	chromaDBInput.Prompt = "ChromaDB URL: "
+	if appSettings.ChromaDBURL != "" {
+		chromaDBInput.SetValue(appSettings.ChromaDBURL)
 	}
 
 	vp := viewport.New(30, 5)
@@ -215,25 +226,26 @@ Key bindings:
 	}
 
 	return &model{
-		textarea:         ta,
-		viewport:         vp,
-		modelsViewport:   modelsVp,
-		ragViewport:      ragVp,
-		settingsViewport: settingsVp,
-		urlTextInput:     urlInput,
-		senderStyle:      lipgloss.NewStyle().Foreground(lipgloss.Color("5")),
-		bot:              b,
-		err:              nil,
-		focus:            initialFocus,
-		selectedModel:    0,
-		activeTab:        initialTab,
-		tabs:             []string{"Chat", "Models", "RAG", "Settings"},
-		ragEnabled:       appSettings.RAGEnabled, // Load RAG state from settings
-		settings:         appSettings,
-		connectionValid:  connectionValid,
-		urlInput:         appSettings.OllamaURL,
-		darkMode:         appSettings.DarkMode, // Load dark mode state from settings
-		models:           initialModels,        // Initialize models list
+		textarea:          ta,
+		viewport:          vp,
+		modelsViewport:    modelsVp,
+		ragViewport:       ragVp,
+		settingsViewport:  settingsVp,
+		urlTextInput:      urlInput,
+		chromaDBTextInput: chromaDBInput,
+		senderStyle:       lipgloss.NewStyle().Foreground(lipgloss.Color("5")),
+		bot:               b,
+		err:               nil,
+		focus:             initialFocus,
+		selectedModel:     0,
+		activeTab:         initialTab,
+		tabs:              []string{"Chat", "Models", "RAG", "Settings"},
+		ragEnabled:        appSettings.RAGEnabled, // Load RAG state from settings
+		settings:          appSettings,
+		connectionValid:   connectionValid,
+		urlInput:          appSettings.OllamaURL,
+		darkMode:          appSettings.DarkMode, // Load dark mode state from settings
+		models:            initialModels,        // Initialize models list
 	}
 }
 
@@ -478,15 +490,24 @@ func (m *model) updateRAGViewportContent() {
 		}
 	}
 
+	// ChromaDB URL display
+	chromaDBStatus := "Not Configured"
+	if m.settings.ChromaDBURL != "" {
+		chromaDBStatus = m.settings.ChromaDBURL
+	}
+
 	content := []string{
 		"RAG Settings",
 		"",
 		"Status: " + lipgloss.NewStyle().Foreground(statusColor).Bold(true).Render(statusText),
 		"",
+		"ChromaDB URL: " + chromaDBStatus,
+		"",
 		toggleText,
 		"",
 		"Controls:",
 		"Enter - Toggle RAG On/Off",
+		"C - Configure ChromaDB URL",
 		"Tab - Switch to Chat",
 	}
 
@@ -494,6 +515,12 @@ func (m *model) updateRAGViewportContent() {
 }
 
 func (m *model) updateInputPlaceholder() {
+	// Handle special input focuses first
+	if m.focus == focusChromaDBInput {
+		// ChromaDB input has its own placeholder, no need to change textarea
+		return
+	}
+
 	switch m.activeTab {
 	case chatTab:
 		if m.connectionValid {
@@ -565,14 +592,18 @@ func (m *model) updateSettingsViewportContent() {
 
 func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	var (
-		tiCmd  tea.Cmd
-		vpCmd  tea.Cmd
-		mvCmd  tea.Cmd
-		ragCmd tea.Cmd
+		tiCmd     tea.Cmd
+		vpCmd     tea.Cmd
+		mvCmd     tea.Cmd
+		ragCmd    tea.Cmd
+		chromaCmd tea.Cmd
 	)
 
 	if m.focus == focusTextarea {
 		m.textarea, tiCmd = m.textarea.Update(msg)
+	}
+	if m.focus == focusChromaDBInput {
+		m.chromaDBTextInput, chromaCmd = m.chromaDBTextInput.Update(msg)
 	}
 	m.viewport, vpCmd = m.viewport.Update(msg)
 	m.modelsViewport, mvCmd = m.modelsViewport.Update(msg)
@@ -677,6 +708,17 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			m.updateSettingsViewportContent()
 			m.updateInputPlaceholder()
+		case "c":
+			// Handle ChromaDB URL configuration on RAG tab
+			if m.activeTab == ragTab && m.focus == focusRAGViewport {
+				m.focus = focusChromaDBInput
+				m.chromaDBTextInput.Focus()
+				// Pre-fill with current ChromaDB URL if any for editing
+				if m.settings.ChromaDBURL != "" {
+					m.chromaDBTextInput.SetValue(m.settings.ChromaDBURL)
+				}
+				m.updateInputPlaceholder()
+			}
 		case "up":
 			if m.activeTab == modelsTab && m.focus == focusModelsViewport && m.selectedModel > 0 {
 				m.selectedModel--
@@ -695,7 +737,7 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			input := m.textarea.Value()
 
 			// Handle tab-specific viewport interactions first (when not focused on textarea)
-			if m.focus != focusTextarea {
+			if m.focus != focusTextarea && m.focus != focusChromaDBInput {
 				if m.activeTab == modelsTab && m.focus == focusModelsViewport {
 					if m.bot.ModelManager != nil && len(m.models) > 0 {
 						selectedModel := m.models[m.selectedModel]
@@ -727,6 +769,27 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					}
 					m.updateInputPlaceholder()
 				}
+				return m, nil
+			}
+
+			// Handle ChromaDB input
+			if m.focus == focusChromaDBInput {
+				chromaURL := strings.TrimSpace(m.chromaDBTextInput.Value())
+				if chromaURL != "" {
+					// Basic validation - must start with http:// or https://
+					if !strings.HasPrefix(chromaURL, "http://") && !strings.HasPrefix(chromaURL, "https://") {
+						m.inputError = "ChromaDB URL must start with http:// or https://"
+						return m, nil
+					}
+					// Save ChromaDB URL to settings
+					m.settings.SetChromaDBURL(chromaURL)
+					m.inputError = "" // Clear any previous errors
+				}
+				// Return to RAG viewport
+				m.focus = focusRAGViewport
+				m.chromaDBTextInput.Blur()
+				m.updateRAGViewportContent() // Update to show new URL
+				m.updateInputPlaceholder()
 				return m, nil
 			}
 
@@ -882,6 +945,33 @@ Key bindings:
 						m.updateSettingsViewportContent()
 						m.updateInputPlaceholder()
 						return m, nil
+					} else if m.activeTab == ragTab && m.focus == focusChromaDBInput {
+						// RAG tab: handle ChromaDB URL input
+						chromaDBURL := m.chromaDBTextInput.Value()
+						m.inputError = "" // Clear any existing errors
+
+						// Basic URL validation
+						if chromaDBURL == "" {
+							m.inputError = "ChromaDB URL cannot be empty"
+						} else if !strings.HasPrefix(chromaDBURL, "http://") && !strings.HasPrefix(chromaDBURL, "https://") {
+							m.inputError = "ChromaDB URL must start with http:// or https://"
+						} else {
+							// Save the ChromaDB URL to settings
+							err := m.settings.SetChromaDBURL(chromaDBURL)
+							if err != nil {
+								m.inputError = "Failed to save ChromaDB URL: " + err.Error()
+							} else {
+								m.inputError = "" // Clear any errors on success
+								// Switch back to RAG viewport focus
+								m.focus = focusRAGViewport
+								m.chromaDBTextInput.Blur()
+								m.updateRAGViewportContent()
+							}
+						}
+
+						m.chromaDBTextInput.Reset()
+						m.updateInputPlaceholder()
+						return m, nil
 					} else if m.activeTab != chatTab {
 						// Non-settings, non-chat tab with non-command input
 						m.inputError = "Chat input detected. Please switch to the chat tab and press enter"
@@ -931,6 +1021,13 @@ Key bindings:
 				m.textarea.SetCursor(len(m.textarea.Value()))
 			}
 		case "ctrl+c", "esc":
+			// If we're in ChromaDB input mode, escape back to RAG viewport
+			if m.focus == focusChromaDBInput {
+				m.focus = focusRAGViewport
+				m.chromaDBTextInput.Blur()
+				m.updateInputPlaceholder()
+				return m, nil
+			}
 			return m, tea.Quit
 		}
 
@@ -940,7 +1037,7 @@ Key bindings:
 		return m, nil
 	}
 
-	return m, tea.Batch(tiCmd, vpCmd, mvCmd, ragCmd)
+	return m, tea.Batch(tiCmd, vpCmd, mvCmd, ragCmd, chromaCmd)
 }
 
 func (m *model) View() string {
@@ -1042,6 +1139,15 @@ func (m *model) View() string {
 		adjustedGap = "\n" // Reduce gap since we're adding error message line
 	}
 
-	// Combine tabs, content, error message, and textarea
-	return tabRow + "\n" + content + adjustedGap + errorDisplay + m.textarea.View()
+	// Handle special input rendering
+	var inputDisplay string
+	if m.focus == focusChromaDBInput {
+		// Show ChromaDB input instead of textarea when focused
+		inputDisplay = m.chromaDBTextInput.View()
+	} else {
+		inputDisplay = m.textarea.View()
+	}
+
+	// Combine tabs, content, error message, and input
+	return tabRow + "\n" + content + adjustedGap + errorDisplay + inputDisplay
 }

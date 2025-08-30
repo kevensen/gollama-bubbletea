@@ -8,19 +8,21 @@ import (
 
 // Settings holds the application settings
 type Settings struct {
-	LastModel  string `json:"lastModel"`
-	RAGEnabled bool   `json:"ragEnabled"`
-	OllamaURL  string `json:"ollamaURL"`
-	DarkMode   bool   `json:"darkMode"`
+	LastModel   string `json:"lastModel"`
+	RAGEnabled  bool   `json:"ragEnabled"`
+	OllamaURL   string `json:"ollamaURL"`
+	ChromaDBURL string `json:"chromaDBURL"`
+	DarkMode    bool   `json:"darkMode"`
 }
 
 // Default settings
 func DefaultSettings() *Settings {
 	return &Settings{
-		LastModel:  "",
-		RAGEnabled: false,
-		OllamaURL:  "", // No default URL - user must configure
-		DarkMode:   false,
+		LastModel:   "",
+		RAGEnabled:  false,
+		OllamaURL:   "", // No default URL - user must configure
+		ChromaDBURL: "", // No default ChromaDB URL - user must configure
+		DarkMode:    false,
 	}
 }
 
@@ -101,5 +103,11 @@ func (s *Settings) SetOllamaURL(url string) error {
 // SetDarkMode updates the dark mode state and saves settings
 func (s *Settings) SetDarkMode(enabled bool) error {
 	s.DarkMode = enabled
+	return s.Save()
+}
+
+// SetChromaDBURL updates the ChromaDB URL and saves settings
+func (s *Settings) SetChromaDBURL(url string) error {
+	s.ChromaDBURL = url
 	return s.Save()
 }

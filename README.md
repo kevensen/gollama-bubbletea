@@ -11,12 +11,14 @@ You need [Ollama](https://ollama.com/) installed somewhere in your environment w
 
 ## Execution
 ```
-go run cmd/main.go -ollama_host=http://127.0.0.1 -ollama_port=11434
+go run cmd/main.go
 ```
 or
 ```
 make run
 ```
+Or download the binary.
+
 ## Things I want to do
 - [ ] Add unit tests
 - [ ] Add agent support

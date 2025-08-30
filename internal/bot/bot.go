@@ -81,6 +81,14 @@ func (b *Bot) EstimateTokens() int {
 	return b.MessageManager.EstimateTokens()
 }
 
+// GetContextWindowSize returns the context window size of the current model
+func (b *Bot) GetContextWindowSize() (int, error) {
+	if b.ModelManager == nil {
+		return 0, fmt.Errorf("no model manager available")
+	}
+	return b.ModelManager.GetContextWindowSize()
+}
+
 func (b *Bot) ClearMessages() {
 	b.MessageManager.Clear()
 }

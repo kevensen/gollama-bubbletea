@@ -268,13 +268,45 @@ func (m *model) updateTabNames() {
 	tokenCount := m.bot.EstimateTokens()
 	chatTabName := "Chat"
 	if tokenCount > 0 {
-		chatTabName = fmt.Sprintf("Chat (%d tokens)", tokenCount)
+		// Try to get context window size as well
+		if m.connectionValid && m.bot.ModelManager != nil {
+			contextSize, err := m.bot.GetContextWindowSize()
+			if err == nil {
+				contextSizeFormatted := formatTokenCount(contextSize)
+				chatTabName = fmt.Sprintf("Chat (%d/%s tokens)", tokenCount, contextSizeFormatted)
+			} else {
+				chatTabName = fmt.Sprintf("Chat (%d tokens)", tokenCount)
+			}
+		} else {
+			chatTabName = fmt.Sprintf("Chat (%d tokens)", tokenCount)
+		}
 	}
 
 	m.tabs[0] = chatTabName
 	m.tabs[1] = "Models: " + currentModel
 	m.tabs[2] = "RAG: " + ragStatus
 	m.tabs[3] = "Settings: " + connectionStatus
+}
+
+// formatTokenCount converts large token counts to more readable format (e.g., 131072 -> "128K")
+func formatTokenCount(count int) string {
+	if count >= 1048576 { // 1024 * 1024
+		// Convert to millions (M) using binary base
+		millions := float64(count) / 1048576.0
+		if millions == float64(int(millions)) {
+			return fmt.Sprintf("%.0fM", millions)
+		}
+		return fmt.Sprintf("%.1fM", millions)
+	} else if count >= 1024 {
+		// Convert to thousands (K) using binary base
+		thousands := float64(count) / 1024.0
+		if thousands == float64(int(thousands)) {
+			return fmt.Sprintf("%.0fK", thousands)
+		}
+		return fmt.Sprintf("%.1fK", thousands)
+	}
+	// For small numbers, show as-is
+	return fmt.Sprintf("%d", count)
 }
 
 // applyTheme applies the current theme (light or dark mode) to all UI elements

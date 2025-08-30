@@ -2,6 +2,7 @@ package tui
 
 import (
 	"context"
+	"fmt"
 	"strings"
 
 	"github.com/charmbracelet/bubbles/textarea"
@@ -243,6 +244,8 @@ func (m *model) handleChatResponse(resp llm.Answer) error {
 		m.responseBuffer = ""
 		m.viewport.SetContent(lipgloss.NewStyle().Width(m.viewport.Width).Render(strings.Join(m.bot.MessageManager.StyledMessages(), "\n")))
 		m.viewport.GotoBottom()
+		// Update tab names to reflect new token count
+		m.updateTabNames()
 	}
 	return nil
 }
@@ -260,7 +263,15 @@ func (m *model) updateTabNames() {
 	if m.connectionValid {
 		connectionStatus = "Connected"
 	}
-	m.tabs[0] = "Chat"
+
+	// Get token count for chat tab
+	tokenCount := m.bot.EstimateTokens()
+	chatTabName := "Chat"
+	if tokenCount > 0 {
+		chatTabName = fmt.Sprintf("Chat (%d tokens)", tokenCount)
+	}
+
+	m.tabs[0] = chatTabName
 	m.tabs[1] = "Models: " + currentModel
 	m.tabs[2] = "RAG: " + ragStatus
 	m.tabs[3] = "Settings: " + connectionStatus
@@ -767,6 +778,8 @@ Key bindings:
   • Ctrl+A - go to start
   • Ctrl+E - go to end
   • Ctrl+C or Esc - quit`)
+							// Update tab names to reflect cleared tokens (should be 0 now)
+							m.updateTabNames()
 							m.textarea.Reset()
 							return m, nil
 						} else {
@@ -863,6 +876,8 @@ Key bindings:
 						if ans != nil {
 							m.handleChatResponse(*ans)
 						}
+						// Update tab names to reflect new token count after sending message
+						m.updateTabNames()
 						m.textarea.Reset()
 						m.viewport.GotoBottom()
 					}

@@ -59,6 +59,27 @@ func (m *Manager) Len() int {
 	return len(m.history.Messages)
 }
 
+// EstimateTokens provides a rough estimate of tokens in the current context
+// Uses ~4 characters per token as a general estimate for English text
+func (m *Manager) EstimateTokens() int {
+	totalChars := 0
+
+	// Get all messages in the history
+	llms, err := m.history.GetAllMessages()
+	if err != nil {
+		return 0
+	}
+
+	// Count characters in all message content
+	for _, msg := range llms {
+		totalChars += len(msg.Content)
+		totalChars += len(msg.Role) + 10 // Add some overhead for role and formatting
+	}
+
+	// Rough estimate: ~4 characters per token
+	return totalChars / 4
+}
+
 func (m *Manager) Clear() {
 	m.currentMessageID = 0
 	m.history.Messages = make(map[string]llm.MessageRecord)

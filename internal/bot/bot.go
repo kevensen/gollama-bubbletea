@@ -74,6 +74,13 @@ func (b *Bot) MessageLen() int {
 	return b.MessageManager.Len()
 }
 
+func (b *Bot) EstimateTokens() int {
+	if b.MessageManager == nil {
+		return 0
+	}
+	return b.MessageManager.EstimateTokens()
+}
+
 func (b *Bot) ClearMessages() {
 	b.MessageManager.Clear()
 }

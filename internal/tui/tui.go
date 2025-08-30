@@ -28,12 +28,19 @@ func tabBorderWithBottom(left, middle, right string) lipgloss.Border {
 }
 
 var (
-	inactiveTabBorder        = tabBorderWithBottom("┴", "─", "┴")
-	activeTabBorder          = tabBorderWithBottom("┘", " ", "└")
-	highlightColor           = lipgloss.AdaptiveColor{Light: "#874BFD", Dark: "#7D56F4"}
-	greenColor               = lipgloss.AdaptiveColor{Light: "#00AA00", Dark: "#00FF00"}
-	redColor                 = lipgloss.AdaptiveColor{Light: "#CC0000", Dark: "#FF4444"}
-	blueColor                = lipgloss.AdaptiveColor{Light: "#0066CC", Dark: "#4499FF"}
+	inactiveTabBorder = tabBorderWithBottom("┴", "─", "┴")
+	activeTabBorder   = tabBorderWithBottom("┘", " ", "└")
+	highlightColor    = lipgloss.AdaptiveColor{Light: "#874BFD", Dark: "#7D56F4"}
+	greenColor        = lipgloss.AdaptiveColor{Light: "#00AA00", Dark: "#00FF00"}
+	redColor          = lipgloss.AdaptiveColor{Light: "#CC0000", Dark: "#FF4444"}
+	blueColor         = lipgloss.AdaptiveColor{Light: "#0066CC", Dark: "#4499FF"}
+
+	// Dark mode colors
+	darkModeTextColor       = lipgloss.Color("#E0E0E0") // Non-accented text
+	darkModeAccentColor     = lipgloss.Color("#DAA520") // Goldenrod for accented text
+	darkModeBackgroundColor = lipgloss.Color("#121212") // Dark background
+	darkModeBorderColor     = lipgloss.Color("#FFD700") // Gold for lines/borders
+
 	inactiveTabStyle         = lipgloss.NewStyle().Border(inactiveTabBorder, true).BorderForeground(highlightColor).Padding(0, 1)
 	activeTabStyle           = inactiveTabStyle.Border(activeTabBorder, true)
 	inactiveModelsTabStyle   = lipgloss.NewStyle().Border(inactiveTabBorder, true).BorderForeground(greenColor).Padding(0, 1)
@@ -92,6 +99,7 @@ type model struct {
 	settings         *settings.Settings
 	connectionValid  bool   // Whether Ollama connection is valid
 	urlInput         string // Current URL being entered in settings
+	darkMode         bool   // Dark mode state
 }
 
 func New(b *bot.Bot) *model {
@@ -146,6 +154,7 @@ Special commands:
   • /models - switch to models tab
   • /rag - switch to RAG tab
   • /settings - switch to settings tab
+  • /dark - toggle dark mode
   • /exit or /quit - quit application
 
 Key bindings:
@@ -198,6 +207,12 @@ Key bindings:
 		}
 	}
 
+	// Initialize models list if we have a valid connection
+	var initialModels []string
+	if connectionValid && b.ModelManager != nil {
+		initialModels = b.ModelManager.ModelNames()
+	}
+
 	return &model{
 		textarea:         ta,
 		viewport:         vp,
@@ -216,6 +231,8 @@ Key bindings:
 		settings:         appSettings,
 		connectionValid:  connectionValid,
 		urlInput:         appSettings.OllamaURL,
+		darkMode:         appSettings.DarkMode, // Load dark mode state from settings
+		models:           initialModels,        // Initialize models list
 	}
 }
 
@@ -249,7 +266,92 @@ func (m *model) updateTabNames() {
 	m.tabs[3] = "Settings: " + connectionStatus
 }
 
+// applyTheme applies the current theme (light or dark mode) to all UI elements
+func (m *model) applyTheme() {
+	if m.darkMode {
+		// Dark mode theme
+		borderColor := darkModeBorderColor
+		textColor := darkModeTextColor
+
+		// Update viewport styles
+		m.viewport.Style = lipgloss.NewStyle().
+			BorderStyle(lipgloss.RoundedBorder()).
+			BorderForeground(borderColor).
+			Foreground(textColor)
+
+		m.modelsViewport.Style = lipgloss.NewStyle().
+			BorderStyle(lipgloss.RoundedBorder()).
+			BorderForeground(borderColor).
+			Foreground(textColor)
+
+		m.ragViewport.Style = lipgloss.NewStyle().
+			BorderStyle(lipgloss.RoundedBorder()).
+			BorderForeground(borderColor).
+			Foreground(textColor)
+
+		m.settingsViewport.Style = lipgloss.NewStyle().
+			BorderStyle(lipgloss.RoundedBorder()).
+			BorderForeground(borderColor).
+			Foreground(textColor)
+
+		// Update sender style for dark mode
+		m.senderStyle = lipgloss.NewStyle().Foreground(darkModeAccentColor)
+	} else {
+		// Light mode theme (original colors)
+		m.viewport.Style = lipgloss.NewStyle().
+			BorderStyle(lipgloss.RoundedBorder()).
+			BorderForeground(lipgloss.Color("62"))
+
+		m.modelsViewport.Style = lipgloss.NewStyle().
+			BorderStyle(lipgloss.RoundedBorder()).
+			BorderForeground(greenColor)
+
+		m.ragViewport.Style = lipgloss.NewStyle().
+			BorderStyle(lipgloss.RoundedBorder()).
+			BorderForeground(lipgloss.Color("1"))
+
+		m.settingsViewport.Style = lipgloss.NewStyle().
+			BorderStyle(lipgloss.RoundedBorder()).
+			BorderForeground(blueColor)
+
+		// Restore original sender style
+		m.senderStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("5"))
+	}
+}
+
+// getTabStyles returns theme-aware tab styles
+func (m *model) getTabStyles() (inactive, active, inactiveModels, activeModels, inactiveRAG, activeRAG, inactiveSettings, activeSettings lipgloss.Style) {
+	if m.darkMode {
+		// Dark mode tab styles - all use gold borders
+		borderColor := darkModeBorderColor
+		textColor := darkModeTextColor
+
+		inactive = lipgloss.NewStyle().Border(inactiveTabBorder, true).BorderForeground(borderColor).Foreground(textColor).Padding(0, 1)
+		active = inactive.Border(activeTabBorder, true).Foreground(darkModeAccentColor)
+
+		// All tabs use same dark mode styling
+		inactiveModels = inactive
+		activeModels = active
+		inactiveRAG = inactive
+		activeRAG = active
+		inactiveSettings = inactive
+		activeSettings = active
+	} else {
+		// Light mode tab styles (original colors)
+		inactive = inactiveTabStyle
+		active = activeTabStyle
+		inactiveModels = inactiveModelsTabStyle
+		activeModels = activeModelsTabStyle
+		inactiveRAG = inactiveRAGTabStyle
+		activeRAG = activeRAGTabStyle
+		inactiveSettings = inactiveSettingsTabStyle
+		activeSettings = activeSettingsTabStyle
+	}
+	return
+}
+
 func (m *model) Init() tea.Cmd {
+	m.applyTheme() // Apply theme first
 	m.updateTabNames()
 	m.updateModelsViewportContent()
 	m.updateRAGViewportContent()
@@ -284,11 +386,20 @@ func (m *model) updateModelsViewportContent() {
 		prefix := "  "
 
 		if model == currentModel {
-			style = style.Foreground(lipgloss.Color("2")) // Highlight current model in green
+			// Use theme-aware colors
+			if m.darkMode {
+				style = style.Foreground(darkModeAccentColor) // Goldenrod for current model in dark mode
+			} else {
+				style = style.Foreground(lipgloss.Color("2")) // Green for current model in light mode
+			}
 			prefix = "→ "
 		}
 		if i == m.selectedModel && m.focus == focusModelsViewport {
-			style = style.Background(lipgloss.Color("7")).Foreground(lipgloss.Color("0")) // Highlight selected model
+			if m.darkMode {
+				style = style.Background(darkModeAccentColor).Foreground(darkModeBackgroundColor)
+			} else {
+				style = style.Background(lipgloss.Color("7")).Foreground(lipgloss.Color("0"))
+			}
 		}
 		styledModels = append(styledModels, prefix+style.Render(model))
 	}
@@ -300,20 +411,34 @@ func (m *model) updateModelsViewportContent() {
 }
 
 func (m *model) updateRAGViewportContent() {
-	statusColor := "1" // Red for disabled
+	var statusColor lipgloss.Color
 	statusText := "DISABLED"
 	toggleText := "Press Enter to Enable"
 
 	if m.ragEnabled {
-		statusColor = "2" // Green for enabled
 		statusText = "ENABLED"
 		toggleText = "Press Enter to Disable"
+	}
+
+	// Use theme-aware colors
+	if m.darkMode {
+		if m.ragEnabled {
+			statusColor = darkModeAccentColor // Goldenrod for enabled in dark mode
+		} else {
+			statusColor = darkModeTextColor // Light gray for disabled in dark mode
+		}
+	} else {
+		if m.ragEnabled {
+			statusColor = lipgloss.Color("2") // Green for enabled in light mode
+		} else {
+			statusColor = lipgloss.Color("1") // Red for disabled in light mode
+		}
 	}
 
 	content := []string{
 		"RAG Settings",
 		"",
-		"Status: " + lipgloss.NewStyle().Foreground(lipgloss.Color(statusColor)).Bold(true).Render(statusText),
+		"Status: " + lipgloss.NewStyle().Foreground(statusColor).Bold(true).Render(statusText),
 		"",
 		toggleText,
 		"",
@@ -352,13 +477,23 @@ func (m *model) updateInputPlaceholder() {
 
 func (m *model) updateSettingsViewportContent() {
 	connectionStatus := "✗ DISCONNECTED"
-	connectionColor := "1" // Red
+	var connectionColor lipgloss.Color
 	statusMessage := "Enter Ollama server URL in the input field below."
 
 	if m.connectionValid {
 		connectionStatus = "✓ CONNECTED"
-		connectionColor = "2" // Green
+		if m.darkMode {
+			connectionColor = darkModeAccentColor // Goldenrod for connected in dark mode
+		} else {
+			connectionColor = lipgloss.Color("2") // Green for connected in light mode
+		}
 		statusMessage = "Connection established! Press Enter to edit URL if needed."
+	} else {
+		if m.darkMode {
+			connectionColor = darkModeTextColor // Light gray for disconnected in dark mode
+		} else {
+			connectionColor = lipgloss.Color("1") // Red for disconnected in light mode
+		}
 	}
 
 	currentURL := m.settings.OllamaURL
@@ -370,7 +505,7 @@ func (m *model) updateSettingsViewportContent() {
 		"Ollama Server URL",
 		"",
 		"Current URL: " + currentURL,
-		"Connection: " + lipgloss.NewStyle().Foreground(lipgloss.Color(connectionColor)).Bold(true).Render(connectionStatus),
+		"Connection: " + lipgloss.NewStyle().Foreground(connectionColor).Bold(true).Render(connectionStatus),
 		"",
 		statusMessage,
 		"Press Enter to test the connection.",
@@ -449,6 +584,10 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.activeTab = modelsTab
 				m.focus = focusModelsViewport
 				m.textarea.Blur()
+				// Fetch models when switching to models tab
+				if m.connectionValid && m.bot.ModelManager != nil {
+					m.models = m.bot.ModelManager.ModelNames()
+				}
 			case modelsTab:
 				m.activeTab = ragTab
 				m.focus = focusRAGViewport
@@ -576,6 +715,10 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 							return m, nil
 						}
 						m.activeTab = modelsTab
+						// Fetch models when switching via command
+						if m.bot.ModelManager != nil {
+							m.models = m.bot.ModelManager.ModelNames()
+						}
 						m.updateTabNames()
 						m.updateModelsViewportContent()
 						m.textarea.Reset()
@@ -591,6 +734,13 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 						return m, nil
 					case "/settings":
 						m.activeTab = settingsTab
+						m.textarea.Reset()
+						return m, nil
+					case "/dark":
+						// Toggle dark mode
+						m.darkMode = !m.darkMode
+						m.settings.SetDarkMode(m.darkMode)
+						m.applyTheme() // Apply the new theme
 						m.textarea.Reset()
 						return m, nil
 					case "/clear":
@@ -609,6 +759,7 @@ Special commands:
   • /models - switch to models tab
   • /rag - switch to RAG tab
   • /settings - switch to settings tab
+  • /dark - toggle dark mode
   • /exit or /quit - quit application
 
 Key bindings:
@@ -746,6 +897,10 @@ Key bindings:
 }
 
 func (m *model) View() string {
+	// Get theme-aware tab styles
+	inactiveStyle, activeStyle, inactiveModelsStyle, activeModelsStyle,
+		inactiveRAGStyle, activeRAGStyle, inactiveSettingsStyle, activeSettingsStyle := m.getTabStyles()
+
 	// Render tabs
 	var renderedTabs []string
 
@@ -754,29 +909,29 @@ func (m *model) View() string {
 		isFirst, isLast, isActive := i == 0, i == len(m.tabs)-1, i == int(m.activeTab)
 
 		// Apply styles based on tab type and state
-		if i == 1 { // Models tab - always green
+		if i == 1 { // Models tab
 			if isActive {
-				style = activeModelsTabStyle
+				style = activeModelsStyle
 			} else {
-				style = inactiveModelsTabStyle
+				style = inactiveModelsStyle
 			}
-		} else if i == 2 { // RAG tab - always red
+		} else if i == 2 { // RAG tab
 			if isActive {
-				style = activeRAGTabStyle
+				style = activeRAGStyle
 			} else {
-				style = inactiveRAGTabStyle
+				style = inactiveRAGStyle
 			}
-		} else if i == 3 { // Settings tab - always blue
+		} else if i == 3 { // Settings tab
 			if isActive {
-				style = activeSettingsTabStyle
+				style = activeSettingsStyle
 			} else {
-				style = inactiveSettingsTabStyle
+				style = inactiveSettingsStyle
 			}
-		} else { // Chat tab - purple/blue
+		} else { // Chat tab
 			if isActive {
-				style = activeTabStyle
+				style = activeStyle
 			} else {
-				style = inactiveTabStyle
+				style = inactiveStyle
 			}
 		}
 
@@ -825,8 +980,15 @@ func (m *model) View() string {
 	var errorDisplay string
 	var adjustedGap = gap
 	if m.inputError != "" {
+		var errorColor lipgloss.Color
+		if m.darkMode {
+			errorColor = darkModeTextColor // Light gray for errors in dark mode
+		} else {
+			errorColor = lipgloss.Color("196") // Red for errors in light mode
+		}
+
 		errorStyle := lipgloss.NewStyle().
-			Foreground(lipgloss.Color("196")). // Red color
+			Foreground(errorColor).
 			Bold(true).
 			Padding(0, 1)
 		errorDisplay = errorStyle.Render("⚠ "+m.inputError) + "\n"

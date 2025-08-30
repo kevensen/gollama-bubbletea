@@ -11,6 +11,7 @@ type Settings struct {
 	LastModel  string `json:"lastModel"`
 	RAGEnabled bool   `json:"ragEnabled"`
 	OllamaURL  string `json:"ollamaURL"`
+	DarkMode   bool   `json:"darkMode"`
 }
 
 // Default settings
@@ -19,6 +20,7 @@ func DefaultSettings() *Settings {
 		LastModel:  "",
 		RAGEnabled: false,
 		OllamaURL:  "", // No default URL - user must configure
+		DarkMode:   false,
 	}
 }
 
@@ -93,5 +95,11 @@ func (s *Settings) SetRAGEnabled(enabled bool) error {
 // SetOllamaURL updates the Ollama URL and saves settings
 func (s *Settings) SetOllamaURL(url string) error {
 	s.OllamaURL = url
+	return s.Save()
+}
+
+// SetDarkMode updates the dark mode state and saves settings
+func (s *Settings) SetDarkMode(enabled bool) error {
+	s.DarkMode = enabled
 	return s.Save()
 }

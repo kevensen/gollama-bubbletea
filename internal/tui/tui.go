@@ -161,10 +161,16 @@ Type a message and press Enter to send.` + ascii + "\n\n Use the Tab key to swit
 	initialFocus := focusTextarea
 	if !connectionValid {
 		initialTab = settingsTab
-		initialFocus = focusSettingsViewport
-		ta.Blur() // Don't focus textarea if no connection
+		initialFocus = focusTextarea // Use textarea for URL input
+		ta.Placeholder = "Enter Ollama URL (e.g., http://localhost:11434)"
+		ta.Focus() // Focus textarea for URL input
+		// Pre-fill with current URL if any
+		if appSettings.OllamaURL != "" {
+			ta.SetValue(appSettings.OllamaURL)
+		}
 	} else {
 		ta.Focus()
+		urlInput.Blur()
 		// Apply saved last model if it exists and is valid
 		if appSettings.LastModel != "" && b.ModelManager != nil {
 			err := b.ModelManager.UseModel(appSettings.LastModel)
@@ -319,11 +325,7 @@ func (m *model) updateInputPlaceholder() {
 			m.textarea.Placeholder = "Configure Ollama URL in Settings tab first"
 		}
 	case settingsTab:
-		if m.focus == focusSettingsViewport {
-			m.textarea.Placeholder = "Press Enter to configure Ollama URL..."
-		} else {
-			m.textarea.Placeholder = "Enter Ollama URL (e.g., http://localhost:11434)"
-		}
+		m.textarea.Placeholder = "Enter Ollama URL (e.g., http://localhost:11434)"
 	}
 }
 
@@ -335,36 +337,26 @@ func (m *model) updateSettingsViewportContent() {
 		connectionColor = "2" // Green
 	}
 
-	// Show different instructions based on focus
-	var instructions []string
-	if m.focus == focusSettingsViewport {
-		instructions = []string{
-			"Enter URL below and press Enter to test connection:",
-			"",
-			m.urlTextInput.View(),
-			"",
-			"Controls:",
-			"Enter - Test Connection",
-			"Tab - Switch tabs (if connected)",
-		}
-	} else {
-		instructions = []string{
-			"Press Enter to edit URL",
-			"",
-			"Controls:",
-			"Enter - Edit URL",
-			"Tab - Switch tabs (if connected)",
-		}
+	currentURL := m.settings.OllamaURL
+	if currentURL == "" {
+		currentURL = "(not configured)"
 	}
 
 	content := []string{
 		"Ollama Server URL",
 		"",
+		"Current URL: " + currentURL,
 		"Connection: " + lipgloss.NewStyle().Foreground(lipgloss.Color(connectionColor)).Bold(true).Render(connectionStatus),
 		"",
+		"Enter Ollama server URL in the input field below.",
+		"Press Enter to test the connection.",
+		"",
+		"Example: http://localhost:11434",
+		"",
+		"Controls:",
+		"Enter - Test Connection",
+		"Tab - Switch tabs (if connected)",
 	}
-
-	content = append(content, instructions...)
 
 	m.settingsViewport.SetContent(strings.Join(content, "\n"))
 }
@@ -379,9 +371,6 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	if m.focus == focusTextarea {
 		m.textarea, tiCmd = m.textarea.Update(msg)
-	}
-	if m.focus == focusURLInput {
-		m.urlTextInput, tiCmd = m.urlTextInput.Update(msg)
 	}
 	m.viewport, vpCmd = m.viewport.Update(msg)
 	m.modelsViewport, mvCmd = m.modelsViewport.Update(msg)
@@ -453,10 +442,9 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.updateInputPlaceholder()
 		case "ctrl+t":
 			// Switch focus to textarea for command input (works from any tab)
-			if m.focus != focusTextarea && m.focus != focusURLInput {
+			if m.focus != focusTextarea {
 				m.focus = focusTextarea
 				m.textarea.Focus()
-				m.urlTextInput.Blur()
 			} else {
 				// Switch back to tab-specific focus
 				switch m.activeTab {
@@ -465,15 +453,12 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				case modelsTab:
 					m.focus = focusModelsViewport
 					m.textarea.Blur()
-					m.urlTextInput.Blur()
 				case ragTab:
 					m.focus = focusRAGViewport
 					m.textarea.Blur()
-					m.urlTextInput.Blur()
 				case settingsTab:
 					m.focus = focusSettingsViewport
 					m.textarea.Blur()
-					m.urlTextInput.Blur()
 				}
 			}
 			m.updateSettingsViewportContent()
@@ -519,54 +504,9 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.updateTabNames()
 					m.updateRAGViewportContent()
 				} else if m.activeTab == settingsTab && m.focus == focusSettingsViewport {
-					// On settings tab with viewport focus, switch to URL input
-					m.focus = focusURLInput
-					m.urlTextInput.Focus()
-					m.updateSettingsViewportContent()
-					m.updateInputPlaceholder()
-				}
-				return m, nil
-			}
-
-			// Handle URL input (only when URL input is focused)
-			if m.focus == focusURLInput && m.activeTab == settingsTab {
-				urlValue := m.urlTextInput.Value()
-				if urlValue != "" {
-					// Test the connection to the entered URL
-					m.inputError = "" // Clear any existing errors
-
-					err := bot.TestConnection(urlValue)
-					if err != nil {
-						m.inputError = "Connection failed: " + err.Error()
-						m.connectionValid = false
-					} else {
-						// Connection successful - save URL and initialize bot
-						m.settings.SetOllamaURL(urlValue)
-						m.connectionValid = true
-
-						// Initialize model manager with the new URL
-						defaultModel := "tinyllama:latest"
-						if m.settings.LastModel != "" {
-							defaultModel = m.settings.LastModel
-						}
-
-						err := m.bot.InitializeModelManager(urlValue, defaultModel)
-						if err != nil {
-							m.inputError = "Failed to initialize models: " + err.Error()
-							m.connectionValid = false
-						} else {
-							// Success! Update everything
-							m.models = m.bot.ModelManager.ModelNames()
-							m.updateTabNames()
-							m.updateModelsViewportContent()
-
-							// Switch to chat tab now that we're connected
-							m.activeTab = chatTab
-							m.focus = focusTextarea
-							m.textarea.Focus()
-						}
-					}
-					m.updateSettingsViewportContent()
+					// On settings tab with viewport focus, switch to textarea focus
+					m.focus = focusTextarea
+					m.textarea.Focus()
 					m.updateInputPlaceholder()
 				}
 				return m, nil
@@ -663,6 +603,7 @@ Type a message and press Enter to send.` + ascii + "\n\n Use the Tab key to swit
 
 						m.textarea.Reset()
 						m.updateSettingsViewportContent()
+						m.updateInputPlaceholder()
 						return m, nil
 					} else if m.activeTab != chatTab {
 						// Non-settings, non-chat tab with non-command input

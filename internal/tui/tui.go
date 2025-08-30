@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/charmbracelet/bubbles/textarea"
+	"github.com/charmbracelet/bubbles/textinput"
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -27,17 +28,20 @@ func tabBorderWithBottom(left, middle, right string) lipgloss.Border {
 }
 
 var (
-	inactiveTabBorder      = tabBorderWithBottom("┴", "─", "┴")
-	activeTabBorder        = tabBorderWithBottom("┘", " ", "└")
-	highlightColor         = lipgloss.AdaptiveColor{Light: "#874BFD", Dark: "#7D56F4"}
-	greenColor             = lipgloss.AdaptiveColor{Light: "#00AA00", Dark: "#00FF00"}
-	redColor               = lipgloss.AdaptiveColor{Light: "#CC0000", Dark: "#FF4444"}
-	inactiveTabStyle       = lipgloss.NewStyle().Border(inactiveTabBorder, true).BorderForeground(highlightColor).Padding(0, 1)
-	activeTabStyle         = inactiveTabStyle.Border(activeTabBorder, true)
-	inactiveModelsTabStyle = lipgloss.NewStyle().Border(inactiveTabBorder, true).BorderForeground(greenColor).Padding(0, 1)
-	activeModelsTabStyle   = inactiveModelsTabStyle.Border(activeTabBorder, true)
-	inactiveRAGTabStyle    = lipgloss.NewStyle().Border(inactiveTabBorder, true).BorderForeground(redColor).Padding(0, 1)
-	activeRAGTabStyle      = inactiveRAGTabStyle.Border(activeTabBorder, true)
+	inactiveTabBorder        = tabBorderWithBottom("┴", "─", "┴")
+	activeTabBorder          = tabBorderWithBottom("┘", " ", "└")
+	highlightColor           = lipgloss.AdaptiveColor{Light: "#874BFD", Dark: "#7D56F4"}
+	greenColor               = lipgloss.AdaptiveColor{Light: "#00AA00", Dark: "#00FF00"}
+	redColor                 = lipgloss.AdaptiveColor{Light: "#CC0000", Dark: "#FF4444"}
+	blueColor                = lipgloss.AdaptiveColor{Light: "#0066CC", Dark: "#4499FF"}
+	inactiveTabStyle         = lipgloss.NewStyle().Border(inactiveTabBorder, true).BorderForeground(highlightColor).Padding(0, 1)
+	activeTabStyle           = inactiveTabStyle.Border(activeTabBorder, true)
+	inactiveModelsTabStyle   = lipgloss.NewStyle().Border(inactiveTabBorder, true).BorderForeground(greenColor).Padding(0, 1)
+	activeModelsTabStyle     = inactiveModelsTabStyle.Border(activeTabBorder, true)
+	inactiveRAGTabStyle      = lipgloss.NewStyle().Border(inactiveTabBorder, true).BorderForeground(redColor).Padding(0, 1)
+	activeRAGTabStyle        = inactiveRAGTabStyle.Border(activeTabBorder, true)
+	inactiveSettingsTabStyle = lipgloss.NewStyle().Border(inactiveTabBorder, true).BorderForeground(blueColor).Padding(0, 1)
+	activeSettingsTabStyle   = inactiveSettingsTabStyle.Border(activeTabBorder, true)
 )
 
 // Helper function
@@ -54,6 +58,8 @@ const (
 	focusTextarea focus = iota
 	focusModelsViewport
 	focusRAGViewport
+	focusSettingsViewport
+	focusURLInput
 )
 
 type tab int
@@ -62,25 +68,30 @@ const (
 	chatTab tab = iota
 	modelsTab
 	ragTab
+	settingsTab
 )
 
 type model struct {
-	viewport       viewport.Model
-	modelsViewport viewport.Model
-	ragViewport    viewport.Model
-	textarea       textarea.Model
-	senderStyle    lipgloss.Style
-	bot            *bot.Bot
-	err            error
-	inputError     string // Error message for invalid commands or wrong tab input
-	responseBuffer string
-	focus          focus
-	models         []string
-	selectedModel  int
-	activeTab      tab
-	tabs           []string
-	ragEnabled     bool // RAG enable/disable state
-	settings       *settings.Settings
+	viewport         viewport.Model
+	modelsViewport   viewport.Model
+	ragViewport      viewport.Model
+	settingsViewport viewport.Model
+	textarea         textarea.Model
+	urlTextInput     textinput.Model // Text input for URL in settings
+	senderStyle      lipgloss.Style
+	bot              *bot.Bot
+	err              error
+	inputError       string // Error message for invalid commands or wrong tab input
+	responseBuffer   string
+	focus            focus
+	models           []string
+	selectedModel    int
+	activeTab        tab
+	tabs             []string
+	ragEnabled       bool // RAG enable/disable state
+	settings         *settings.Settings
+	connectionValid  bool   // Whether Ollama connection is valid
+	urlInput         string // Current URL being entered in settings
 }
 
 func New(b *bot.Bot) *model {
@@ -91,9 +102,16 @@ func New(b *bot.Bot) *model {
 		appSettings = settings.DefaultSettings()
 	}
 
+	// Test connection to determine initial state
+	connectionValid := false
+	if appSettings.OllamaURL != "" {
+		if bot.TestConnection(appSettings.OllamaURL) == nil {
+			connectionValid = true
+		}
+	}
+
 	ta := textarea.New()
 	ta.Placeholder = "Send a message..."
-	ta.Focus()
 
 	ta.Prompt = "┃ "
 	ta.CharLimit = 280
@@ -103,8 +121,17 @@ func New(b *bot.Bot) *model {
 
 	// Remove cursor line styling
 	ta.FocusedStyle.CursorLine = lipgloss.NewStyle()
-
 	ta.ShowLineNumbers = false
+	ta.KeyMap.InsertNewline.SetEnabled(false)
+
+	// Initialize URL text input for settings
+	urlInput := textinput.New()
+	urlInput.Placeholder = "http://localhost:11434"
+	urlInput.Width = 40
+	urlInput.Prompt = "URL: "
+	if appSettings.OllamaURL != "" {
+		urlInput.SetValue(appSettings.OllamaURL)
+	}
 
 	vp := viewport.New(30, 5)
 	vp.SetContent(`Welcome to Gollama-Chat!
@@ -115,7 +142,6 @@ Type a message and press Enter to send.` + ascii + "\n\n Use the Tab key to swit
 		BorderForeground(lipgloss.Color("62"))
 
 	modelsVp := viewport.New(20, 5)
-
 	modelsVp.Style = lipgloss.NewStyle().
 		BorderStyle(lipgloss.RoundedBorder()).
 		BorderForeground(greenColor) // Green border to match tab
@@ -125,31 +151,48 @@ Type a message and press Enter to send.` + ascii + "\n\n Use the Tab key to swit
 		BorderStyle(lipgloss.RoundedBorder()).
 		BorderForeground(lipgloss.Color("1")) // Red border
 
-	ta.KeyMap.InsertNewline.SetEnabled(false)
+	settingsVp := viewport.New(30, 5)
+	settingsVp.Style = lipgloss.NewStyle().
+		BorderStyle(lipgloss.RoundedBorder()).
+		BorderForeground(blueColor) // Blue border
 
-	// Apply saved last model if it exists and is valid
-	if appSettings.LastModel != "" {
-		err := b.ModelManager.UseModel(appSettings.LastModel)
-		if err != nil {
-			// If saved model is invalid, keep default but don't error
-			appSettings.LastModel = b.ModelManager.CurrentModel()
+	// Determine initial tab and focus
+	initialTab := chatTab
+	initialFocus := focusTextarea
+	if !connectionValid {
+		initialTab = settingsTab
+		initialFocus = focusSettingsViewport
+		ta.Blur() // Don't focus textarea if no connection
+	} else {
+		ta.Focus()
+		// Apply saved last model if it exists and is valid
+		if appSettings.LastModel != "" && b.ModelManager != nil {
+			err := b.ModelManager.UseModel(appSettings.LastModel)
+			if err != nil {
+				// If saved model is invalid, keep default but don't error
+				appSettings.LastModel = b.ModelManager.CurrentModel()
+			}
 		}
 	}
 
 	return &model{
-		textarea:       ta,
-		viewport:       vp,
-		modelsViewport: modelsVp,
-		ragViewport:    ragVp,
-		senderStyle:    lipgloss.NewStyle().Foreground(lipgloss.Color("5")),
-		bot:            b,
-		err:            nil,
-		focus:          focusTextarea,
-		selectedModel:  0,
-		activeTab:      chatTab,
-		tabs:           []string{"Chat", "Models", "RAG"},
-		ragEnabled:     appSettings.RAGEnabled, // Load RAG state from settings
-		settings:       appSettings,
+		textarea:         ta,
+		viewport:         vp,
+		modelsViewport:   modelsVp,
+		ragViewport:      ragVp,
+		settingsViewport: settingsVp,
+		urlTextInput:     urlInput,
+		senderStyle:      lipgloss.NewStyle().Foreground(lipgloss.Color("5")),
+		bot:              b,
+		err:              nil,
+		focus:            initialFocus,
+		selectedModel:    0,
+		activeTab:        initialTab,
+		tabs:             []string{"Chat", "Models", "RAG", "Settings"},
+		ragEnabled:       appSettings.RAGEnabled, // Load RAG state from settings
+		settings:         appSettings,
+		connectionValid:  connectionValid,
+		urlInput:         appSettings.OllamaURL,
 	}
 }
 
@@ -165,7 +208,10 @@ func (m *model) handleChatResponse(resp llm.Answer) error {
 }
 
 func (m *model) updateTabNames() {
-	currentModel := m.bot.ModelManager.CurrentModel()
+	currentModel := "No Model"
+	if m.bot.ModelManager != nil {
+		currentModel = m.bot.ModelManager.CurrentModel()
+	}
 	ragStatus := "Disabled"
 	if m.ragEnabled {
 		ragStatus = "Enabled"
@@ -173,22 +219,37 @@ func (m *model) updateTabNames() {
 	m.tabs[0] = "Chat"
 	m.tabs[1] = "Models: " + currentModel
 	m.tabs[2] = "RAG: " + ragStatus
+	m.tabs[3] = "Settings"
 }
 
 func (m *model) Init() tea.Cmd {
-	return tea.Batch(textarea.Blink, m.fetchModels)
-}
-
-func (m *model) fetchModels() tea.Msg {
-	models := m.bot.ModelManager.ModelNames()
-	m.models = models
 	m.updateTabNames()
 	m.updateModelsViewportContent()
 	m.updateRAGViewportContent()
+	m.updateSettingsViewportContent()
+	m.updateInputPlaceholder()
+	return textarea.Blink
+}
+
+func (m *model) fetchModels() tea.Msg {
+	// Only fetch models if connection is valid and ModelManager exists
+	if m.connectionValid && m.bot.ModelManager != nil {
+		models := m.bot.ModelManager.ModelNames()
+		m.models = models
+	}
+	m.updateTabNames()
+	m.updateModelsViewportContent()
+	m.updateRAGViewportContent()
+	m.updateSettingsViewportContent()
 	return nil
 }
 
 func (m *model) updateModelsViewportContent() {
+	if m.bot.ModelManager == nil {
+		m.modelsViewport.SetContent("No connection to Ollama server.\nPlease configure URL in Settings tab.")
+		return
+	}
+
 	currentModel := m.bot.ModelManager.CurrentModel()
 	styledModels := []string{"Available Models:", ""}
 	for i, model := range m.models {
@@ -237,6 +298,77 @@ func (m *model) updateRAGViewportContent() {
 	m.ragViewport.SetContent(strings.Join(content, "\n"))
 }
 
+func (m *model) updateInputPlaceholder() {
+	switch m.activeTab {
+	case chatTab:
+		if m.connectionValid {
+			m.textarea.Placeholder = "Send a message..."
+		} else {
+			m.textarea.Placeholder = "Configure Ollama URL in Settings tab first"
+		}
+	case modelsTab:
+		if m.connectionValid {
+			m.textarea.Placeholder = "Type model name or command..."
+		} else {
+			m.textarea.Placeholder = "Configure Ollama URL in Settings tab first"
+		}
+	case ragTab:
+		if m.connectionValid {
+			m.textarea.Placeholder = "RAG configuration..."
+		} else {
+			m.textarea.Placeholder = "Configure Ollama URL in Settings tab first"
+		}
+	case settingsTab:
+		if m.focus == focusSettingsViewport {
+			m.textarea.Placeholder = "Press Enter to configure Ollama URL..."
+		} else {
+			m.textarea.Placeholder = "Enter Ollama URL (e.g., http://localhost:11434)"
+		}
+	}
+}
+
+func (m *model) updateSettingsViewportContent() {
+	connectionStatus := "✗ DISCONNECTED"
+	connectionColor := "1" // Red
+	if m.connectionValid {
+		connectionStatus = "✓ CONNECTED"
+		connectionColor = "2" // Green
+	}
+
+	// Show different instructions based on focus
+	var instructions []string
+	if m.focus == focusSettingsViewport {
+		instructions = []string{
+			"Enter URL below and press Enter to test connection:",
+			"",
+			m.urlTextInput.View(),
+			"",
+			"Controls:",
+			"Enter - Test Connection",
+			"Tab - Switch tabs (if connected)",
+		}
+	} else {
+		instructions = []string{
+			"Press Enter to edit URL",
+			"",
+			"Controls:",
+			"Enter - Edit URL",
+			"Tab - Switch tabs (if connected)",
+		}
+	}
+
+	content := []string{
+		"Ollama Server URL",
+		"",
+		"Connection: " + lipgloss.NewStyle().Foreground(lipgloss.Color(connectionColor)).Bold(true).Render(connectionStatus),
+		"",
+	}
+
+	content = append(content, instructions...)
+
+	m.settingsViewport.SetContent(strings.Join(content, "\n"))
+}
+
 func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	var (
 		tiCmd  tea.Cmd
@@ -248,6 +380,9 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if m.focus == focusTextarea {
 		m.textarea, tiCmd = m.textarea.Update(msg)
 	}
+	if m.focus == focusURLInput {
+		m.urlTextInput, tiCmd = m.urlTextInput.Update(msg)
+	}
 	m.viewport, vpCmd = m.viewport.Update(msg)
 	m.modelsViewport, mvCmd = m.modelsViewport.Update(msg)
 	m.ragViewport, ragCmd = m.ragViewport.Update(msg)
@@ -258,7 +393,10 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		chatViewportWidth := msg.Width - 4 // 4 for padding and border
 
 		// Models viewport width for models tab
-		modelsViewportWidth := min(msg.Width-4, m.bot.ModelManager.MaxModelNameLength()+10)
+		modelsViewportWidth := 30 // Default width
+		if m.bot.ModelManager != nil {
+			modelsViewportWidth = min(msg.Width-4, m.bot.ModelManager.MaxModelNameLength()+10)
+		}
 
 		m.viewport.Width = chatViewportWidth
 		m.modelsViewport.Width = modelsViewportWidth
@@ -281,28 +419,44 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.KeyMsg:
 		switch msg.String() {
 		case "tab":
+			// Prevent tab switching if not connected (except to settings)
+			if !m.connectionValid && m.activeTab != settingsTab {
+				return m, nil
+			}
+
 			// Switch between tabs
 			switch m.activeTab {
 			case chatTab:
-				m.activeTab = modelsTab
-				m.focus = focusModelsViewport
-				m.textarea.Blur()
+				if m.connectionValid {
+					m.activeTab = modelsTab
+					m.focus = focusModelsViewport
+					m.textarea.Blur()
+				}
 			case modelsTab:
 				m.activeTab = ragTab
 				m.focus = focusRAGViewport
 				m.textarea.Blur()
 			case ragTab:
-				m.activeTab = chatTab
-				m.focus = focusTextarea
-				m.textarea.Focus()
+				m.activeTab = settingsTab
+				m.focus = focusSettingsViewport
+				m.textarea.Blur()
+			case settingsTab:
+				if m.connectionValid {
+					m.activeTab = chatTab
+					m.focus = focusTextarea
+					m.textarea.Focus()
+				}
 			}
 			m.updateModelsViewportContent()
 			m.updateRAGViewportContent()
+			m.updateSettingsViewportContent()
+			m.updateInputPlaceholder()
 		case "ctrl+t":
 			// Switch focus to textarea for command input (works from any tab)
-			if m.focus != focusTextarea {
+			if m.focus != focusTextarea && m.focus != focusURLInput {
 				m.focus = focusTextarea
 				m.textarea.Focus()
+				m.urlTextInput.Blur()
 			} else {
 				// Switch back to tab-specific focus
 				switch m.activeTab {
@@ -311,11 +465,19 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				case modelsTab:
 					m.focus = focusModelsViewport
 					m.textarea.Blur()
+					m.urlTextInput.Blur()
 				case ragTab:
 					m.focus = focusRAGViewport
 					m.textarea.Blur()
+					m.urlTextInput.Blur()
+				case settingsTab:
+					m.focus = focusSettingsViewport
+					m.textarea.Blur()
+					m.urlTextInput.Blur()
 				}
 			}
+			m.updateSettingsViewportContent()
+			m.updateInputPlaceholder()
 		case "up":
 			if m.activeTab == modelsTab && m.focus == focusModelsViewport && m.selectedModel > 0 {
 				m.selectedModel--
@@ -336,17 +498,19 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// Handle tab-specific viewport interactions first (when not focused on textarea)
 			if m.focus != focusTextarea {
 				if m.activeTab == modelsTab && m.focus == focusModelsViewport {
-					selectedModel := m.models[m.selectedModel]
-					err := m.bot.ModelManager.UseModel(selectedModel)
-					if err != nil {
-						msg := llm.Message{Role: "error", Content: err.Error()}
-						m.bot.MessageManager.AddMessage(msg)
-					} else {
-						// Save the selected model to settings
-						m.settings.SetLastModel(selectedModel)
+					if m.bot.ModelManager != nil && len(m.models) > 0 {
+						selectedModel := m.models[m.selectedModel]
+						err := m.bot.ModelManager.UseModel(selectedModel)
+						if err != nil {
+							msg := llm.Message{Role: "error", Content: err.Error()}
+							m.bot.MessageManager.AddMessage(msg)
+						} else {
+							// Save the selected model to settings
+							m.settings.SetLastModel(selectedModel)
+						}
+						m.updateTabNames()
+						m.updateModelsViewportContent()
 					}
-					m.updateTabNames()
-					m.updateModelsViewportContent()
 				} else if m.activeTab == ragTab && m.focus == focusRAGViewport {
 					// Toggle RAG enabled/disabled
 					m.ragEnabled = !m.ragEnabled
@@ -354,6 +518,56 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.settings.SetRAGEnabled(m.ragEnabled)
 					m.updateTabNames()
 					m.updateRAGViewportContent()
+				} else if m.activeTab == settingsTab && m.focus == focusSettingsViewport {
+					// On settings tab with viewport focus, switch to URL input
+					m.focus = focusURLInput
+					m.urlTextInput.Focus()
+					m.updateSettingsViewportContent()
+					m.updateInputPlaceholder()
+				}
+				return m, nil
+			}
+
+			// Handle URL input (only when URL input is focused)
+			if m.focus == focusURLInput && m.activeTab == settingsTab {
+				urlValue := m.urlTextInput.Value()
+				if urlValue != "" {
+					// Test the connection to the entered URL
+					m.inputError = "" // Clear any existing errors
+
+					err := bot.TestConnection(urlValue)
+					if err != nil {
+						m.inputError = "Connection failed: " + err.Error()
+						m.connectionValid = false
+					} else {
+						// Connection successful - save URL and initialize bot
+						m.settings.SetOllamaURL(urlValue)
+						m.connectionValid = true
+
+						// Initialize model manager with the new URL
+						defaultModel := "tinyllama:latest"
+						if m.settings.LastModel != "" {
+							defaultModel = m.settings.LastModel
+						}
+
+						err := m.bot.InitializeModelManager(urlValue, defaultModel)
+						if err != nil {
+							m.inputError = "Failed to initialize models: " + err.Error()
+							m.connectionValid = false
+						} else {
+							// Success! Update everything
+							m.models = m.bot.ModelManager.ModelNames()
+							m.updateTabNames()
+							m.updateModelsViewportContent()
+
+							// Switch to chat tab now that we're connected
+							m.activeTab = chatTab
+							m.focus = focusTextarea
+							m.textarea.Focus()
+						}
+					}
+					m.updateSettingsViewportContent()
+					m.updateInputPlaceholder()
 				}
 				return m, nil
 			}
@@ -384,6 +598,10 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 						m.activeTab = ragTab
 						m.textarea.Reset()
 						return m, nil
+					case "/settings":
+						m.activeTab = settingsTab
+						m.textarea.Reset()
+						return m, nil
 					case "/clear":
 						// /clear only works on chat tab
 						if m.activeTab == chatTab {
@@ -406,8 +624,48 @@ Type a message and press Enter to send.` + ascii + "\n\n Use the Tab key to swit
 					}
 				} else {
 					// Non-command input
-					if m.activeTab != chatTab {
-						// Non-chat tab with non-command input
+					if m.activeTab == settingsTab {
+						// Settings tab: treat input as URL to test
+						m.inputError = "" // Clear any existing errors
+
+						// Test the connection to the entered URL
+						err := bot.TestConnection(input)
+						if err != nil {
+							m.inputError = "Connection failed: " + err.Error()
+							m.connectionValid = false
+						} else {
+							// Connection successful - save URL and initialize bot
+							m.settings.SetOllamaURL(input)
+							m.connectionValid = true
+
+							// Initialize model manager with the new URL
+							defaultModel := "tinyllama:latest"
+							if m.settings.LastModel != "" {
+								defaultModel = m.settings.LastModel
+							}
+
+							err := m.bot.InitializeModelManager(input, defaultModel)
+							if err != nil {
+								m.inputError = "Failed to initialize models: " + err.Error()
+								m.connectionValid = false
+							} else {
+								// Success! Update everything
+								m.models = m.bot.ModelManager.ModelNames()
+								m.updateTabNames()
+								m.updateModelsViewportContent()
+
+								// Switch to chat tab now that we're connected
+								m.activeTab = chatTab
+								m.focus = focusTextarea
+								m.textarea.Focus()
+							}
+						}
+
+						m.textarea.Reset()
+						m.updateSettingsViewportContent()
+						return m, nil
+					} else if m.activeTab != chatTab {
+						// Non-settings, non-chat tab with non-command input
 						m.inputError = "Chat input detected. Please switch to the chat tab and press enter"
 						return m, nil // Don't clear textarea for this case
 					} else {
@@ -479,6 +737,12 @@ func (m *model) View() string {
 			} else {
 				style = inactiveRAGTabStyle
 			}
+		} else if i == 3 { // Settings tab - always blue
+			if isActive {
+				style = activeSettingsTabStyle
+			} else {
+				style = inactiveSettingsTabStyle
+			}
 		} else { // Chat tab - purple/blue
 			if isActive {
 				style = activeTabStyle
@@ -514,12 +778,18 @@ func (m *model) View() string {
 			Align(lipgloss.Center).
 			Width(m.viewport.Width).
 			Render(m.modelsViewport.View())
-	} else { // RAG tab
+	} else if m.activeTab == ragTab {
 		// RAG tab: show RAG viewport centered
 		content = lipgloss.NewStyle().
 			Align(lipgloss.Center).
 			Width(m.viewport.Width).
 			Render(m.ragViewport.View())
+	} else { // Settings tab
+		// Settings tab: show settings viewport centered
+		content = lipgloss.NewStyle().
+			Align(lipgloss.Center).
+			Width(m.viewport.Width).
+			Render(m.settingsViewport.View())
 	}
 
 	// Handle error message display without affecting layout spacing

@@ -2,11 +2,10 @@ package main
 
 import (
 	"context"
-	"flag"
 	"log"
-	"os"
 
 	"github.com/kevensen/gollama-bubbletea/internal/bot"
+	"github.com/kevensen/gollama-bubbletea/internal/settings"
 	"github.com/kevensen/gollama-bubbletea/internal/tui"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -14,33 +13,26 @@ import (
 
 func main() {
 	ctx := context.Background()
-	ollamaHost := flag.String("ollama_host", "", "The host for Ollama")
-	ollamaPort := flag.String("ollama_port", "", "The port for Ollama")
-	ollamaModel := flag.String("ollama_model", "tinyllama:latest", "The model for Ollama")
-	flag.Parse()
 
-	if *ollamaHost == "" {
-		*ollamaHost = os.Getenv("OLLAMA_HOST")
+	// Load settings to get Ollama URL
+	appSettings, err := settings.Load()
+	if err != nil {
+		log.Printf("Warning: Could not load settings, using defaults: %v", err)
+		appSettings = settings.DefaultSettings()
 	}
 
-	if *ollamaHost == "" {
-		log.Fatal("OLLAMA_HOST environment variable or flag is required")
-	}
+	// Use default model for now - will be overridden by settings if valid
+	defaultModel := "tinyllama:latest"
 
-	if *ollamaPort == "" {
-		*ollamaPort = os.Getenv("OLLAMA_PORT")
-	}
+	// Always try to create bot, even if no connection
+	// The TUI will handle the no-connection case
+	ollamaURL := appSettings.OllamaURL
 
-	if *ollamaPort == "" {
-		log.Fatal("OLLAMA_PORT environment variable or flag is required")
-	}
-
-	ollamaAddr := *ollamaHost + ":" + *ollamaPort
-
-	b, err := bot.NewBot(ctx, ollamaAddr, *ollamaModel)
+	b, err := bot.NewBot(ctx, ollamaURL, defaultModel)
 	if err != nil {
 		log.Fatalf("Failed to create bot: %v", err)
 	}
+
 	t := tui.New(b)
 
 	p := tea.NewProgram(t)

@@ -3,6 +3,8 @@ package bot
 import (
 	"context"
 	"fmt"
+	"net/http"
+	"time"
 
 	"github.com/kevensen/gollama-bubbletea/internal/bot/messages"
 	"github.com/kevensen/gollama-bubbletea/internal/bot/models"
@@ -25,12 +27,15 @@ func NewBot(ctx context.Context, apiEndpoint string, initialModel string) (*Bot,
 
 	b.MessageManager = messages.NewManager()
 
-	modelManager, err := models.NewManager(apiEndpoint, initialModel)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create model manager: %v", err)
+	// Only try to create model manager if we can connect
+	if apiEndpoint != "" && TestConnection(apiEndpoint) == nil {
+		modelManager, err := models.NewManager(apiEndpoint, initialModel)
+		if err != nil {
+			return nil, fmt.Errorf("failed to create model manager: %v", err)
+		}
+		b.ModelManager = modelManager
 	}
-
-	b.ModelManager = modelManager
+	// If no connection, ModelManager will be nil and we'll handle that in TUI
 
 	return b, nil
 }
@@ -71,4 +76,55 @@ func (b *Bot) MessageLen() int {
 
 func (b *Bot) ClearMessages() {
 	b.MessageManager.Clear()
+}
+
+// TestConnection tests if the Ollama server is reachable
+func TestConnection(url string) error {
+	if url == "" {
+		return fmt.Errorf("no Ollama URL configured")
+	}
+
+	client := &http.Client{
+		Timeout: 5 * time.Second,
+	}
+
+	// Test the /api/tags endpoint which should be available on Ollama
+	resp, err := client.Get(url + "/api/tags")
+	if err != nil {
+		return fmt.Errorf("failed to connect to Ollama at %s: %v", url, err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("Ollama server at %s returned status %d", url, resp.StatusCode)
+	}
+
+	return nil
+}
+
+// InitializeModelManager creates the model manager with the given URL and model
+func (b *Bot) InitializeModelManager(apiEndpoint string, initialModel string) error {
+	if apiEndpoint == "" {
+		return fmt.Errorf("API endpoint cannot be empty")
+	}
+
+	// Test connection first
+	if err := TestConnection(apiEndpoint); err != nil {
+		return err
+	}
+
+	b.ollamaUrl = apiEndpoint
+
+	modelManager, err := models.NewManager(apiEndpoint, initialModel)
+	if err != nil {
+		return fmt.Errorf("failed to create model manager: %v", err)
+	}
+
+	b.ModelManager = modelManager
+	return nil
+}
+
+// HasValidConnection returns true if the bot has a working model manager
+func (b *Bot) HasValidConnection() bool {
+	return b.ModelManager != nil
 }

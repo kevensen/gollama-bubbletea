@@ -10,6 +10,7 @@ import (
 type Settings struct {
 	LastModel  string `json:"lastModel"`
 	RAGEnabled bool   `json:"ragEnabled"`
+	OllamaURL  string `json:"ollamaURL"`
 }
 
 // Default settings
@@ -17,6 +18,7 @@ func DefaultSettings() *Settings {
 	return &Settings{
 		LastModel:  "",
 		RAGEnabled: false,
+		OllamaURL:  "", // No default URL - user must configure
 	}
 }
 
@@ -85,5 +87,11 @@ func (s *Settings) SetLastModel(model string) error {
 // SetRAGEnabled updates the RAG enabled state and saves settings
 func (s *Settings) SetRAGEnabled(enabled bool) error {
 	s.RAGEnabled = enabled
+	return s.Save()
+}
+
+// SetOllamaURL updates the Ollama URL and saves settings
+func (s *Settings) SetOllamaURL(url string) error {
+	s.OllamaURL = url
 	return s.Save()
 }

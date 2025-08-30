@@ -5,6 +5,9 @@ import (
 	"fmt"
 	"net/http"
 	"time"
+	"encoding/json"
+	"bytes"
+	"strings"
 
 	"github.com/kevensen/gollama-bubbletea/internal/bot/messages"
 	"github.com/kevensen/gollama-bubbletea/internal/bot/models"
@@ -68,6 +71,102 @@ func (b *Bot) SendMessage(ctx context.Context, role, message string) (*llm.Answe
 	}
 
 	return &ans, nil
+}
+
+// ChromaDBQuery represents a query to ChromaDB
+type ChromaDBQuery struct {
+	QueryTexts []string `json:"query_texts"`
+	NResults   int      `json:"n_results"`
+}
+
+// ChromaDBResult represents search results from ChromaDB
+type ChromaDBResult struct {
+	Documents [][]string `json:"documents"`
+	Metadatas [][]map[string]interface{} `json:"metadatas"`
+	Distances [][]float64 `json:"distances"`
+}
+
+// SendRAGMessage sends a message with RAG context from ChromaDB
+func (b *Bot) SendRAGMessage(ctx context.Context, role, message, chromaDBURL string) (*llm.Answer, error) {
+	// First, search ChromaDB for relevant context
+	ragContext, err := b.searchChromaDB(chromaDBURL, message)
+	if err != nil {
+		// If RAG search fails, fall back to regular message but add a note
+		contextualMessage := fmt.Sprintf("(RAG search failed: %v)\n\n%s", err, message)
+		return b.SendMessage(ctx, role, contextualMessage)
+	}
+
+	// Enhance the message with RAG context
+	var enhancedMessage string
+	if ragContext != "" {
+		enhancedMessage = fmt.Sprintf("Context from knowledge base:\n%s\n\nUser question: %s", ragContext, message)
+	} else {
+		enhancedMessage = fmt.Sprintf("(No relevant context found in knowledge base)\n\nUser question: %s", message)
+	}
+
+	// Send the enhanced message
+	return b.SendMessage(ctx, role, enhancedMessage)
+}
+
+// searchChromaDB searches the ChromaDB instance for relevant context
+func (b *Bot) searchChromaDB(chromaDBURL, query string) (string, error) {
+	if chromaDBURL == "" {
+		return "", fmt.Errorf("ChromaDB URL not configured")
+	}
+
+	// Create ChromaDB query
+	chromaQuery := ChromaDBQuery{
+		QueryTexts: []string{query},
+		NResults:   3, // Get top 3 most relevant results
+	}
+
+	queryData, err := json.Marshal(chromaQuery)
+	if err != nil {
+		return "", fmt.Errorf("failed to marshal ChromaDB query: %v", err)
+	}
+
+	// Make request to ChromaDB (assuming a collection named "documents")
+	// This is a basic implementation - you may need to adjust the endpoint based on your ChromaDB setup
+	searchURL := fmt.Sprintf("%s/api/v1/collections/documents/query", chromaDBURL)
+	
+	client := &http.Client{
+		Timeout: 10 * time.Second,
+	}
+
+	req, err := http.NewRequest("POST", searchURL, bytes.NewBuffer(queryData))
+	if err != nil {
+		return "", fmt.Errorf("failed to create ChromaDB request: %v", err)
+	}
+
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("failed to query ChromaDB: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("ChromaDB returned status %d", resp.StatusCode)
+	}
+
+	// Parse response
+	var result ChromaDBResult
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return "", fmt.Errorf("failed to decode ChromaDB response: %v", err)
+	}
+
+	// Extract and format the relevant documents
+	var contextBuilder strings.Builder
+	if len(result.Documents) > 0 && len(result.Documents[0]) > 0 {
+		for i, doc := range result.Documents[0] {
+			if i < 3 { // Limit to top 3 results
+				contextBuilder.WriteString(fmt.Sprintf("Document %d: %s\n", i+1, doc))
+			}
+		}
+	}
+
+	return contextBuilder.String(), nil
 }
 
 func (b *Bot) MessageLen() int {

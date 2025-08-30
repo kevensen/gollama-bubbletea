@@ -460,7 +460,7 @@ func (m *model) updateModelsViewportContent() {
 	}
 
 	// Add instructions
-	styledModels = append(styledModels, "", "Controls:", "↑/↓ - Navigate", "Enter - Select Model", "Tab - Switch to Chat")
+	styledModels = append(styledModels, "", "Controls:", "↑/↓ - Navigate", "Enter - Select Model", "Tab - Switch tabs")
 
 	m.modelsViewport.SetContent(strings.Join(styledModels, "\n"))
 }
@@ -490,10 +490,22 @@ func (m *model) updateRAGViewportContent() {
 		}
 	}
 
-	// ChromaDB URL display
+	// ChromaDB URL display and RAG readiness
 	chromaDBStatus := "Not Configured"
+	ragReadyStatus := ""
 	if m.settings.ChromaDBURL != "" {
 		chromaDBStatus = m.settings.ChromaDBURL
+		if m.ragEnabled {
+			ragReadyStatus = "✅ RAG will be used for queries"
+		} else {
+			ragReadyStatus = "⚠️  RAG disabled - will use direct chat"
+		}
+	} else {
+		if m.ragEnabled {
+			ragReadyStatus = "❌ RAG enabled but ChromaDB not configured"
+		} else {
+			ragReadyStatus = "ℹ️  Configure ChromaDB URL to enable RAG"
+		}
 	}
 
 	content := []string{
@@ -503,12 +515,14 @@ func (m *model) updateRAGViewportContent() {
 		"",
 		"ChromaDB URL: " + chromaDBStatus,
 		"",
+		ragReadyStatus,
+		"",
 		toggleText,
 		"",
 		"Controls:",
 		"Enter - Toggle RAG On/Off",
 		"C - Configure ChromaDB URL",
-		"Tab - Switch to Chat",
+		"Tab - Switch tabs",
 	}
 
 	m.ragViewport.SetContent(strings.Join(content, "\n"))
@@ -524,7 +538,13 @@ func (m *model) updateInputPlaceholder() {
 	switch m.activeTab {
 	case chatTab:
 		if m.connectionValid {
-			m.textarea.Placeholder = "Send a message..."
+			if m.ragEnabled && m.settings.ChromaDBURL != "" {
+				m.textarea.Placeholder = "Send a message (RAG enabled)..."
+			} else if m.ragEnabled && m.settings.ChromaDBURL == "" {
+				m.textarea.Placeholder = "Send a message (RAG disabled - no ChromaDB URL)..."
+			} else {
+				m.textarea.Placeholder = "Send a message..."
+			}
 		} else {
 			m.textarea.Placeholder = "Configure Ollama URL in Settings tab first"
 		}
@@ -620,12 +640,15 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			modelsViewportWidth = min(msg.Width-4, m.bot.ModelManager.MaxModelNameLength()+10)
 		}
 
+		// RAG viewport width - make it wider to accommodate status messages
+		ragViewportWidth := min(msg.Width-4, 70) // Wider width for RAG status messages
+
 		// Settings viewport width - make it wider to accommodate URLs
 		settingsViewportWidth := min(msg.Width-4, 60) // Larger width for settings
 
 		m.viewport.Width = chatViewportWidth
 		m.modelsViewport.Width = modelsViewportWidth
-		m.ragViewport.Width = modelsViewportWidth
+		m.ragViewport.Width = ragViewportWidth
 		m.settingsViewport.Width = settingsViewportWidth
 		m.textarea.SetWidth(chatViewportWidth)
 
@@ -987,10 +1010,21 @@ Key bindings:
 							return m, nil
 						}
 
-						// Regular chat message handling
+						// Chat message handling with optional RAG
 						m.viewport.SetContent(lipgloss.NewStyle().Width(m.viewport.Width).Render(strings.Join(m.bot.MessageManager.StyledMessages(), "\n")))
 						ctx := context.Background()
-						ans, err := m.bot.SendMessage(ctx, "user", input)
+						
+						var ans *llm.Answer
+						var err error
+						
+						// Use RAG if enabled and ChromaDB URL is configured
+						if m.ragEnabled && m.settings.ChromaDBURL != "" {
+							ans, err = m.bot.SendRAGMessage(ctx, "user", input, m.settings.ChromaDBURL)
+						} else {
+							// Regular message handling
+							ans, err = m.bot.SendMessage(ctx, "user", input)
+						}
+						
 						if err != nil {
 							msg := llm.Message{Role: "error", Content: err.Error()}
 							m.bot.MessageManager.AddMessage(msg)

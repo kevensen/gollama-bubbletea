@@ -239,10 +239,14 @@ func (m *model) updateTabNames() {
 	if m.ragEnabled {
 		ragStatus = "Enabled"
 	}
+	connectionStatus := "Not Connected"
+	if m.connectionValid {
+		connectionStatus = "Connected"
+	}
 	m.tabs[0] = "Chat"
 	m.tabs[1] = "Models: " + currentModel
 	m.tabs[2] = "RAG: " + ragStatus
-	m.tabs[3] = "Settings"
+	m.tabs[3] = "Settings: " + connectionStatus
 }
 
 func (m *model) Init() tea.Cmd {
@@ -433,8 +437,11 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.KeyMsg:
 		switch msg.String() {
 		case "tab":
-			// Always allow tab switching - user can navigate freely
-			// (Chat/Models/RAG will show appropriate "no connection" messages)
+			// Only allow tab switching if connection is valid OR if we're currently on settings tab
+			if !m.connectionValid && m.activeTab != settingsTab {
+				m.inputError = "Please configure Ollama URL in Settings tab first"
+				return m, nil
+			}
 
 			// Switch between tabs
 			switch m.activeTab {
@@ -451,9 +458,15 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.focus = focusSettingsViewport
 				m.textarea.Blur()
 			case settingsTab:
-				m.activeTab = chatTab
-				m.focus = focusTextarea
-				m.textarea.Focus()
+				// Only allow leaving settings if connection is valid
+				if m.connectionValid {
+					m.activeTab = chatTab
+					m.focus = focusTextarea
+					m.textarea.Focus()
+				} else {
+					m.inputError = "Please configure a valid Ollama URL before leaving Settings"
+					return m, nil
+				}
 			}
 			m.updateModelsViewportContent()
 			m.updateRAGViewportContent()
@@ -548,16 +561,31 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					case "/exit", "/quit":
 						return m, tea.Quit
 					case "/chat":
+						if !m.connectionValid {
+							m.inputError = "Please configure Ollama URL in Settings tab first"
+							m.textarea.Reset()
+							return m, nil
+						}
 						m.activeTab = chatTab
 						m.textarea.Reset()
 						return m, nil
 					case "/models":
+						if !m.connectionValid {
+							m.inputError = "Please configure Ollama URL in Settings tab first"
+							m.textarea.Reset()
+							return m, nil
+						}
 						m.activeTab = modelsTab
 						m.updateTabNames()
 						m.updateModelsViewportContent()
 						m.textarea.Reset()
 						return m, nil
 					case "/rag":
+						if !m.connectionValid {
+							m.inputError = "Please configure Ollama URL in Settings tab first"
+							m.textarea.Reset()
+							return m, nil
+						}
 						m.activeTab = ragTab
 						m.textarea.Reset()
 						return m, nil
@@ -611,18 +639,19 @@ Key bindings:
 						// Test the connection to the entered URL
 						err := bot.TestConnection(input)
 						if err != nil {
-							// Make error message more concise
+							// Connection failed - don't save the invalid URL
+							// Keep the existing connectionValid state and URL
 							errorMsg := err.Error()
 							if strings.Contains(errorMsg, "no such host") {
-								m.inputError = "Invalid hostname or server not reachable"
+								m.inputError = "Invalid hostname or server not reachable - keeping current URL"
 							} else if strings.Contains(errorMsg, "connection refused") {
-								m.inputError = "Connection refused - check if Ollama is running"
+								m.inputError = "Connection refused - check if Ollama is running - keeping current URL"
 							} else if strings.Contains(errorMsg, "timeout") {
-								m.inputError = "Connection timeout - server not responding"
+								m.inputError = "Connection timeout - server not responding - keeping current URL"
 							} else {
-								m.inputError = "Connection failed - please check URL"
+								m.inputError = "Connection failed - please check URL - keeping current URL"
 							}
-							m.connectionValid = false
+							// Don't change connectionValid or save the bad URL
 						} else {
 							// Connection successful - save URL and initialize bot
 							m.settings.SetOllamaURL(input)
@@ -637,7 +666,8 @@ Key bindings:
 							err := m.bot.InitializeModelManager(input, defaultModel)
 							if err != nil {
 								m.inputError = "Failed to initialize models: " + err.Error()
-								m.connectionValid = false
+								// Don't change connectionValid if we had a working URL before
+								// The HTTP connection worked, but model initialization failed
 							} else {
 								// Success! Update everything
 								m.models = m.bot.ModelManager.ModelNames()
@@ -652,6 +682,7 @@ Key bindings:
 						}
 
 						m.textarea.Reset()
+						m.updateTabNames() // Update tab names to reflect current connection status
 						m.updateSettingsViewportContent()
 						m.updateInputPlaceholder()
 						return m, nil
@@ -662,6 +693,13 @@ Key bindings:
 					} else {
 						// Valid chat input - clear any existing error
 						m.inputError = ""
+
+						// Check if we have a valid connection and ModelManager before sending
+						if !m.connectionValid || m.bot.ModelManager == nil {
+							m.inputError = "No connection to Ollama server. Please configure URL in Settings tab."
+							m.textarea.Reset()
+							return m, nil
+						}
 
 						// Regular chat message handling
 						m.viewport.SetContent(lipgloss.NewStyle().Width(m.viewport.Width).Render(strings.Join(m.bot.MessageManager.StyledMessages(), "\n")))

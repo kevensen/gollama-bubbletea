@@ -1013,10 +1013,10 @@ Key bindings:
 						// Chat message handling with optional RAG
 						m.viewport.SetContent(lipgloss.NewStyle().Width(m.viewport.Width).Render(strings.Join(m.bot.MessageManager.StyledMessages(), "\n")))
 						ctx := context.Background()
-						
+
 						var ans *llm.Answer
 						var err error
-						
+
 						// Use RAG if enabled and ChromaDB URL is configured
 						if m.ragEnabled && m.settings.ChromaDBURL != "" {
 							ans, err = m.bot.SendRAGMessage(ctx, "user", input, m.settings.ChromaDBURL)
@@ -1024,7 +1024,7 @@ Key bindings:
 							// Regular message handling
 							ans, err = m.bot.SendMessage(ctx, "user", input)
 						}
-						
+
 						if err != nil {
 							msg := llm.Message{Role: "error", Content: err.Error()}
 							m.bot.MessageManager.AddMessage(msg)

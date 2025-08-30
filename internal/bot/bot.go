@@ -1,13 +1,13 @@
 package bot
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/http"
-	"time"
-	"encoding/json"
-	"bytes"
 	"strings"
+	"time"
 
 	"github.com/kevensen/gollama-bubbletea/internal/bot/messages"
 	"github.com/kevensen/gollama-bubbletea/internal/bot/models"
@@ -81,9 +81,9 @@ type ChromaDBQuery struct {
 
 // ChromaDBResult represents search results from ChromaDB
 type ChromaDBResult struct {
-	Documents [][]string `json:"documents"`
+	Documents [][]string                 `json:"documents"`
 	Metadatas [][]map[string]interface{} `json:"metadatas"`
-	Distances [][]float64 `json:"distances"`
+	Distances [][]float64                `json:"distances"`
 }
 
 // SendRAGMessage sends a message with RAG context from ChromaDB
@@ -128,7 +128,7 @@ func (b *Bot) searchChromaDB(chromaDBURL, query string) (string, error) {
 	// Make request to ChromaDB (assuming a collection named "documents")
 	// This is a basic implementation - you may need to adjust the endpoint based on your ChromaDB setup
 	searchURL := fmt.Sprintf("%s/api/v1/collections/documents/query", chromaDBURL)
-	
+
 	client := &http.Client{
 		Timeout: 10 * time.Second,
 	}

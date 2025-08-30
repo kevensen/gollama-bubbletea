@@ -135,7 +135,24 @@ func New(b *bot.Bot) *model {
 
 	vp := viewport.New(30, 5)
 	vp.SetContent(`Welcome to Gollama-Chat!
-Type a message and press Enter to send.` + ascii + "\n\n Use the Tab key to switch between Chat, Models, and RAG tabs.\n Use Ctrl+T to focus the input field for commands from any tab.\n Special commands: /clear (clear history), /chat (chat tab), /models (models tab), /rag (rag tab), /exit or /quit (quit)\n Key bindings: Ctrl+U (clear input), Ctrl+A (start), Ctrl+E (end)\n Use ctrl+c or esc to quit.")
+Type a message and press Enter to send.` + ascii + `
+
+Use the Tab key to switch between Chat, Models, RAG, and Settings tabs.
+Use Ctrl+T to focus the input field for commands from any tab.
+
+Special commands:
+  • /clear - clear chat history
+  • /chat - switch to chat tab
+  • /models - switch to models tab
+  • /rag - switch to RAG tab
+  • /settings - switch to settings tab
+  • /exit or /quit - quit application
+
+Key bindings:
+  • Ctrl+U - clear input
+  • Ctrl+A - go to start
+  • Ctrl+E - go to end
+  • Ctrl+C or Esc - quit`)
 
 	vp.Style = lipgloss.NewStyle().
 		BorderStyle(lipgloss.RoundedBorder()).
@@ -151,7 +168,7 @@ Type a message and press Enter to send.` + ascii + "\n\n Use the Tab key to swit
 		BorderStyle(lipgloss.RoundedBorder()).
 		BorderForeground(lipgloss.Color("1")) // Red border
 
-	settingsVp := viewport.New(30, 5)
+	settingsVp := viewport.New(50, 5)
 	settingsVp.Style = lipgloss.NewStyle().
 		BorderStyle(lipgloss.RoundedBorder()).
 		BorderForeground(blueColor) // Blue border
@@ -332,9 +349,12 @@ func (m *model) updateInputPlaceholder() {
 func (m *model) updateSettingsViewportContent() {
 	connectionStatus := "✗ DISCONNECTED"
 	connectionColor := "1" // Red
+	statusMessage := "Enter Ollama server URL in the input field below."
+
 	if m.connectionValid {
 		connectionStatus = "✓ CONNECTED"
 		connectionColor = "2" // Green
+		statusMessage = "Connection established! Press Enter to edit URL if needed."
 	}
 
 	currentURL := m.settings.OllamaURL
@@ -348,14 +368,14 @@ func (m *model) updateSettingsViewportContent() {
 		"Current URL: " + currentURL,
 		"Connection: " + lipgloss.NewStyle().Foreground(lipgloss.Color(connectionColor)).Bold(true).Render(connectionStatus),
 		"",
-		"Enter Ollama server URL in the input field below.",
+		statusMessage,
 		"Press Enter to test the connection.",
 		"",
 		"Example: http://localhost:11434",
 		"",
 		"Controls:",
-		"Enter - Test Connection",
-		"Tab - Switch tabs (if connected)",
+		"Enter - Edit/Test URL",
+		"Tab - Switch tabs",
 	}
 
 	m.settingsViewport.SetContent(strings.Join(content, "\n"))
@@ -387,9 +407,13 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			modelsViewportWidth = min(msg.Width-4, m.bot.ModelManager.MaxModelNameLength()+10)
 		}
 
+		// Settings viewport width - make it wider to accommodate URLs
+		settingsViewportWidth := min(msg.Width-4, 60) // Larger width for settings
+
 		m.viewport.Width = chatViewportWidth
 		m.modelsViewport.Width = modelsViewportWidth
 		m.ragViewport.Width = modelsViewportWidth
+		m.settingsViewport.Width = settingsViewportWidth
 		m.textarea.SetWidth(chatViewportWidth)
 
 		// Height calculations (accounting for tab header)
@@ -399,6 +423,7 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.viewport.Height = availableHeight
 		m.modelsViewport.Height = availableHeight
 		m.ragViewport.Height = availableHeight
+		m.settingsViewport.Height = availableHeight
 
 		if m.bot.MessageLen() > 0 {
 			// Wrap content before setting it.
@@ -408,19 +433,15 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.KeyMsg:
 		switch msg.String() {
 		case "tab":
-			// Prevent tab switching if not connected (except to settings)
-			if !m.connectionValid && m.activeTab != settingsTab {
-				return m, nil
-			}
+			// Always allow tab switching - user can navigate freely
+			// (Chat/Models/RAG will show appropriate "no connection" messages)
 
 			// Switch between tabs
 			switch m.activeTab {
 			case chatTab:
-				if m.connectionValid {
-					m.activeTab = modelsTab
-					m.focus = focusModelsViewport
-					m.textarea.Blur()
-				}
+				m.activeTab = modelsTab
+				m.focus = focusModelsViewport
+				m.textarea.Blur()
 			case modelsTab:
 				m.activeTab = ragTab
 				m.focus = focusRAGViewport
@@ -430,11 +451,9 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.focus = focusSettingsViewport
 				m.textarea.Blur()
 			case settingsTab:
-				if m.connectionValid {
-					m.activeTab = chatTab
-					m.focus = focusTextarea
-					m.textarea.Focus()
-				}
+				m.activeTab = chatTab
+				m.focus = focusTextarea
+				m.textarea.Focus()
 			}
 			m.updateModelsViewportContent()
 			m.updateRAGViewportContent()
@@ -504,9 +523,13 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.updateTabNames()
 					m.updateRAGViewportContent()
 				} else if m.activeTab == settingsTab && m.focus == focusSettingsViewport {
-					// On settings tab with viewport focus, switch to textarea focus
+					// On settings tab with viewport focus, switch to textarea focus for URL editing
 					m.focus = focusTextarea
 					m.textarea.Focus()
+					// Pre-fill with current URL if any for editing
+					if m.settings.OllamaURL != "" {
+						m.textarea.SetValue(m.settings.OllamaURL)
+					}
 					m.updateInputPlaceholder()
 				}
 				return m, nil
@@ -547,7 +570,24 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 						if m.activeTab == chatTab {
 							m.bot.ClearMessages()
 							m.viewport.SetContent(`Welcome to Gollama-Chat!
-Type a message and press Enter to send.` + ascii + "\n\n Use the Tab key to switch between Chat, Models, and RAG tabs.\n Use Ctrl+T to focus the input field for commands from any tab.\n Special commands: /clear (clear history), /chat (chat tab), /models (models tab), /rag (rag tab), /exit or /quit (quit)\n Key bindings: Ctrl+U (clear input), Ctrl+A (start), Ctrl+E (end)\n Use ctrl+c or esc to quit.")
+Type a message and press Enter to send.` + ascii + `
+
+Use the Tab key to switch between Chat, Models, RAG, and Settings tabs.
+Use Ctrl+T to focus the input field for commands from any tab.
+
+Special commands:
+  • /clear - clear chat history
+  • /chat - switch to chat tab
+  • /models - switch to models tab
+  • /rag - switch to RAG tab
+  • /settings - switch to settings tab
+  • /exit or /quit - quit application
+
+Key bindings:
+  • Ctrl+U - clear input
+  • Ctrl+A - go to start
+  • Ctrl+E - go to end
+  • Ctrl+C or Esc - quit`)
 							m.textarea.Reset()
 							return m, nil
 						} else {
@@ -571,7 +611,17 @@ Type a message and press Enter to send.` + ascii + "\n\n Use the Tab key to swit
 						// Test the connection to the entered URL
 						err := bot.TestConnection(input)
 						if err != nil {
-							m.inputError = "Connection failed: " + err.Error()
+							// Make error message more concise
+							errorMsg := err.Error()
+							if strings.Contains(errorMsg, "no such host") {
+								m.inputError = "Invalid hostname or server not reachable"
+							} else if strings.Contains(errorMsg, "connection refused") {
+								m.inputError = "Connection refused - check if Ollama is running"
+							} else if strings.Contains(errorMsg, "timeout") {
+								m.inputError = "Connection timeout - server not responding"
+							} else {
+								m.inputError = "Connection failed - please check URL"
+							}
 							m.connectionValid = false
 						} else {
 							// Connection successful - save URL and initialize bot

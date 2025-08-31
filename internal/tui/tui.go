@@ -1010,8 +1010,10 @@ Key bindings:
 							return m, nil
 						}
 
+						// Clear textarea immediately when user presses enter
+						m.textarea.Reset()
+
 						// Chat message handling with optional RAG
-						m.viewport.SetContent(lipgloss.NewStyle().Width(m.viewport.Width).Render(strings.Join(m.bot.MessageManager.StyledMessages(), "\n")))
 						ctx := context.Background()
 
 						var ans *llm.Answer
@@ -1025,17 +1027,25 @@ Key bindings:
 							ans, err = m.bot.SendMessage(ctx, "user", input)
 						}
 
+						// Update viewport after the bot has processed the message (which adds it to MessageManager)
+						m.viewport.SetContent(lipgloss.NewStyle().Width(m.viewport.Width).Render(strings.Join(m.bot.MessageManager.StyledMessages(), "\n")))
+						m.viewport.GotoBottom()
+
+						// Update tab names to reflect new token count after adding user message
+						m.updateTabNames()
+
 						if err != nil {
 							msg := llm.Message{Role: "error", Content: err.Error()}
 							m.bot.MessageManager.AddMessage(msg)
+							// Update viewport to show error immediately
+							m.viewport.SetContent(lipgloss.NewStyle().Width(m.viewport.Width).Render(strings.Join(m.bot.MessageManager.StyledMessages(), "\n")))
+							m.viewport.GotoBottom()
 						}
 						if ans != nil {
 							m.handleChatResponse(*ans)
 						}
-						// Update tab names to reflect new token count after sending message
+						// Update tab names again to reflect final token count after response
 						m.updateTabNames()
-						m.textarea.Reset()
-						m.viewport.GotoBottom()
 					}
 				}
 			}

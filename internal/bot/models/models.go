@@ -68,12 +68,20 @@ func NewManager(ollamaURL string, initialModel string) (*Manager, error) {
 		ollamaURL: ollamaURL,
 	}
 
-	// Check if the initial model exists
-	if !slices.Contains(mgr.ModelNames(), initialModel) {
-		return nil, fmt.Errorf("model not found: %s", initialModel)
+	// Get available model names
+	availableModels := mgr.ModelNames()
+	if len(availableModels) == 0 {
+		return nil, fmt.Errorf("no models available on Ollama server")
 	}
 
-	mgr.currentModel = initialModel
+	// Check if the initial model exists, if not use the first available model
+	if slices.Contains(availableModels, initialModel) {
+		mgr.currentModel = initialModel
+	} else {
+		// Fall back to the first available model
+		mgr.currentModel = availableModels[0]
+	}
+
 	return mgr, nil
 }
 

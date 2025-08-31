@@ -34,9 +34,12 @@ func NewBot(ctx context.Context, apiEndpoint string, initialModel string) (*Bot,
 	if apiEndpoint != "" && TestConnection(apiEndpoint) == nil {
 		modelManager, err := models.NewManager(apiEndpoint, initialModel)
 		if err != nil {
-			return nil, fmt.Errorf("failed to create model manager: %v", err)
+			// Don't fail bot creation if no models are available
+			// Just leave ModelManager as nil and let TUI handle it gracefully
+			b.ModelManager = nil
+		} else {
+			b.ModelManager = modelManager
 		}
-		b.ModelManager = modelManager
 	}
 	// If no connection, ModelManager will be nil and we'll handle that in TUI
 

@@ -251,7 +251,12 @@ Key bindings:
 	// Determine initial tab and focus
 	initialTab := chatTab
 	initialFocus := focusTextarea
+
+	// Check if we have no connection or no models available
+	hasModels := connectionValid && b.ModelManager != nil
+
 	if !connectionValid {
+		// No connection - start on settings tab
 		initialTab = settingsTab
 		initialFocus = focusTextarea // Use textarea for URL input
 		ta.Placeholder = "Enter Ollama URL (e.g., http://localhost:11434)"
@@ -260,7 +265,13 @@ Key bindings:
 		if appSettings.OllamaURL != "" {
 			ta.SetValue(appSettings.OllamaURL)
 		}
+	} else if !hasModels {
+		// Connection valid but no models - start on models tab
+		initialTab = modelsTab
+		initialFocus = focusModelsViewport
+		ta.Blur()
 	} else {
+		// Connection and models available - start on chat tab
 		ta.Focus()
 		urlInput.Blur()
 		// Apply saved last model if it exists and is valid
@@ -485,7 +496,32 @@ func (m *model) fetchModels() tea.Msg {
 
 func (m *model) updateModelsViewportContent() {
 	if m.bot.ModelManager == nil {
-		m.modelsViewport.SetContent("No connection to Ollama server.\nPlease configure URL in Settings tab.")
+		if m.connectionValid {
+			// Connection valid but no models available
+			content := []string{
+				"No Models Available",
+				"",
+				"No models were found on your Ollama server.",
+				"",
+				"To add models, run the following command",
+				"on your Ollama server:",
+				"",
+				"  ollama pull <model-name>",
+				"",
+				"Popular models to try:",
+				"  • ollama pull llama3.2:1b",
+				"  • ollama pull llama3.2:3b",
+				"  • ollama pull qwen2.5:1.5b",
+				"  • ollama pull phi3.5:3.8b",
+				"",
+				"After pulling models, restart this application",
+				"or press Tab to refresh.",
+			}
+			m.modelsViewport.SetContent(strings.Join(content, "\n"))
+		} else {
+			// No connection
+			m.modelsViewport.SetContent("No connection to Ollama server.\nPlease configure URL in Settings tab.")
+		}
 		return
 	}
 
@@ -590,9 +626,16 @@ func (m *model) updateInputPlaceholder() {
 		return
 	}
 
+	// Check if we have models available
+	hasModels := m.connectionValid && m.bot.ModelManager != nil
+
 	switch m.activeTab {
 	case chatTab:
-		if m.connectionValid {
+		if !m.connectionValid {
+			m.textarea.Placeholder = "Configure Ollama URL in Settings tab first"
+		} else if !hasModels {
+			m.textarea.Placeholder = "No models available - pull models with 'ollama pull <model-name>'"
+		} else {
 			if m.ragEnabled && m.settings.ChromaDBURL != "" {
 				m.textarea.Placeholder = "Send a message (RAG enabled)..."
 			} else if m.ragEnabled && m.settings.ChromaDBURL == "" {
@@ -600,20 +643,22 @@ func (m *model) updateInputPlaceholder() {
 			} else {
 				m.textarea.Placeholder = "Send a message..."
 			}
-		} else {
-			m.textarea.Placeholder = "Configure Ollama URL in Settings tab first"
 		}
 	case modelsTab:
-		if m.connectionValid {
-			m.textarea.Placeholder = "Type model name or command..."
-		} else {
+		if !m.connectionValid {
 			m.textarea.Placeholder = "Configure Ollama URL in Settings tab first"
+		} else if !hasModels {
+			m.textarea.Placeholder = "No models available - use 'ollama pull <model-name>' to add models"
+		} else {
+			m.textarea.Placeholder = "Type model name or command..."
 		}
 	case ragTab:
-		if m.connectionValid {
-			m.textarea.Placeholder = "RAG configuration..."
-		} else {
+		if !m.connectionValid {
 			m.textarea.Placeholder = "Configure Ollama URL in Settings tab first"
+		} else if !hasModels {
+			m.textarea.Placeholder = "Pull models first before configuring RAG"
+		} else {
+			m.textarea.Placeholder = "RAG configuration..."
 		}
 	case settingsTab:
 		m.textarea.Placeholder = "Enter Ollama URL (e.g., http://localhost:11434)"
@@ -693,6 +738,9 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		modelsViewportWidth := 30 // Default width
 		if m.bot.ModelManager != nil {
 			modelsViewportWidth = min(msg.Width-4, m.bot.ModelManager.MaxModelNameLength()+10)
+		} else {
+			// When no models are available, use wider viewport for the help message
+			modelsViewportWidth = min(msg.Width-4, 60) // Wider width for help text
 		}
 
 		// RAG viewport width - make it wider to accommodate status messages
@@ -724,6 +772,9 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.KeyMsg:
 		switch msg.String() {
 		case "tab":
+			// Check if we have models available for chat functionality
+			hasModels := m.connectionValid && m.bot.ModelManager != nil
+
 			// Only allow tab switching if connection is valid OR if we're currently on settings tab
 			if !m.connectionValid && m.activeTab != settingsTab {
 				m.inputError = "Please configure Ollama URL in Settings tab first"
@@ -749,11 +800,16 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.focus = focusSettingsViewport
 				m.textarea.Blur()
 			case settingsTab:
-				// Only allow leaving settings if connection is valid
-				if m.connectionValid {
+				// Only allow leaving settings if connection is valid and models are available
+				if hasModels {
 					m.activeTab = chatTab
 					m.focus = focusTextarea
 					m.textarea.Focus()
+				} else if m.connectionValid {
+					// Connection valid but no models - go to models tab
+					m.activeTab = modelsTab
+					m.focus = focusModelsViewport
+					m.textarea.Blur()
 				} else {
 					m.inputError = "Please configure a valid Ollama URL before leaving Settings"
 					return m, nil
@@ -886,6 +942,11 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					case "/chat":
 						if !m.connectionValid {
 							m.inputError = "Please configure Ollama URL in Settings tab first"
+							m.textarea.Reset()
+							return m, nil
+						}
+						if m.bot.ModelManager == nil {
+							m.inputError = "No models available. Please pull models using 'ollama pull <model-name>'"
 							m.textarea.Reset()
 							return m, nil
 						}
@@ -1059,8 +1120,13 @@ Key bindings:
 						m.inputError = ""
 
 						// Check if we have a valid connection and ModelManager before sending
-						if !m.connectionValid || m.bot.ModelManager == nil {
+						if !m.connectionValid {
 							m.inputError = "No connection to Ollama server. Please configure URL in Settings tab."
+							m.textarea.Reset()
+							return m, nil
+						}
+						if m.bot.ModelManager == nil {
+							m.inputError = "No models available. Please use 'ollama pull <model-name>' to add models."
 							m.textarea.Reset()
 							return m, nil
 						}

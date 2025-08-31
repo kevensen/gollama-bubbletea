@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/charmbracelet/bubbles/textarea"
 	"github.com/charmbracelet/bubbles/textinput"
@@ -18,6 +19,15 @@ import (
 const gap = "\n\n"
 
 type errMsg error
+
+// tickMsg is sent when the typing indicator should animate
+type tickMsg time.Time
+
+// chatResponseMsg is sent when we receive a response from the bot
+type chatResponseMsg struct {
+	response *llm.Answer
+	err      error
+}
 
 // Tab styling
 func tabBorderWithBottom(left, middle, right string) lipgloss.Border {
@@ -58,6 +68,48 @@ func min(a, b int) int {
 		return a
 	}
 	return b
+}
+
+// tickEvery returns a command that emits tick messages at the given interval
+func tickEvery(d time.Duration) tea.Cmd {
+	return tea.Every(d, func(t time.Time) tea.Msg {
+		return tickMsg(t)
+	})
+}
+
+// getThinkingIndicator returns the animated thinking indicator based on current frame
+func (m *model) getThinkingIndicator() string {
+	frames := []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}
+	frame := frames[m.thinkingFrame%len(frames)]
+
+	var color lipgloss.Color
+	if m.darkMode {
+		color = darkModeAccentColor
+	} else {
+		color = lipgloss.Color("5") // Purple
+	}
+
+	style := lipgloss.NewStyle().Foreground(color)
+	return style.Render(fmt.Sprintf("%s Assistant is thinking...", frame))
+}
+
+// sendChatMessage creates a command to send a message asynchronously
+func (m *model) sendChatMessage(input string) tea.Cmd {
+	return func() tea.Msg {
+		ctx := context.Background()
+		var ans *llm.Answer
+		var err error
+
+		// Use RAG if enabled and ChromaDB URL is configured
+		if m.ragEnabled && m.settings.ChromaDBURL != "" {
+			ans, err = m.bot.SendRAGMessageWithoutAdding(ctx, "user", input, m.settings.ChromaDBURL)
+		} else {
+			// Regular message handling
+			ans, err = m.bot.SendMessageWithoutAdding(ctx, "user", input)
+		}
+
+		return chatResponseMsg{response: ans, err: err}
+	}
 }
 
 type focus int
@@ -103,6 +155,8 @@ type model struct {
 	connectionValid   bool   // Whether Ollama connection is valid
 	urlInput          string // Current URL being entered in settings
 	darkMode          bool   // Dark mode state
+	isThinking        bool   // Whether the bot is currently processing a response
+	thinkingFrame     int    // Current frame of the thinking animation
 }
 
 func New(b *bot.Bot) *model {
@@ -252,6 +306,7 @@ Key bindings:
 func (m *model) handleChatResponse(resp llm.Answer) error {
 	m.responseBuffer += resp.Message.Content
 	if resp.Done && m.responseBuffer != "" {
+		m.isThinking = false // Stop thinking indicator
 		m.bot.MessageManager.AddMessage(resp.Message)
 		m.responseBuffer = ""
 		m.viewport.SetContent(lipgloss.NewStyle().Width(m.viewport.Width).Render(strings.Join(m.bot.MessageManager.StyledMessages(), "\n")))
@@ -412,7 +467,7 @@ func (m *model) Init() tea.Cmd {
 	m.updateRAGViewportContent()
 	m.updateSettingsViewportContent()
 	m.updateInputPlaceholder()
-	return textarea.Blink
+	return tea.Batch(textarea.Blink, tickEvery(100*time.Millisecond))
 }
 
 func (m *model) fetchModels() tea.Msg {
@@ -1010,42 +1065,24 @@ Key bindings:
 							return m, nil
 						}
 
-						// Clear textarea immediately when user presses enter
-						m.textarea.Reset()
-
-						// Chat message handling with optional RAG
-						ctx := context.Background()
-
-						var ans *llm.Answer
-						var err error
-
-						// Use RAG if enabled and ChromaDB URL is configured
-						if m.ragEnabled && m.settings.ChromaDBURL != "" {
-							ans, err = m.bot.SendRAGMessage(ctx, "user", input, m.settings.ChromaDBURL)
-						} else {
-							// Regular message handling
-							ans, err = m.bot.SendMessage(ctx, "user", input)
-						}
-
-						// Update viewport after the bot has processed the message (which adds it to MessageManager)
+						// Add user message to viewport immediately
+						userMsg := llm.Message{Role: "user", Content: input}
+						m.bot.MessageManager.AddMessage(userMsg)
 						m.viewport.SetContent(lipgloss.NewStyle().Width(m.viewport.Width).Render(strings.Join(m.bot.MessageManager.StyledMessages(), "\n")))
 						m.viewport.GotoBottom()
 
 						// Update tab names to reflect new token count after adding user message
 						m.updateTabNames()
 
-						if err != nil {
-							msg := llm.Message{Role: "error", Content: err.Error()}
-							m.bot.MessageManager.AddMessage(msg)
-							// Update viewport to show error immediately
-							m.viewport.SetContent(lipgloss.NewStyle().Width(m.viewport.Width).Render(strings.Join(m.bot.MessageManager.StyledMessages(), "\n")))
-							m.viewport.GotoBottom()
-						}
-						if ans != nil {
-							m.handleChatResponse(*ans)
-						}
-						// Update tab names again to reflect final token count after response
-						m.updateTabNames()
+						// Clear textarea immediately after adding message
+						m.textarea.Reset()
+
+						// Start thinking indicator
+						m.isThinking = true
+						m.thinkingFrame = 0
+
+						// Send message asynchronously
+						return m, m.sendChatMessage(input)
 					}
 				}
 			}
@@ -1074,6 +1111,38 @@ Key bindings:
 			}
 			return m, tea.Quit
 		}
+
+	// Handle tick messages for thinking indicator animation
+	case tickMsg:
+		if m.isThinking {
+			m.thinkingFrame++
+			// Update the viewport with the new thinking indicator
+			messages := m.bot.MessageManager.StyledMessages()
+			if len(messages) > 0 {
+				// Add thinking indicator to the last message
+				content := strings.Join(messages, "\n") + "\n\n" + m.getThinkingIndicator()
+				m.viewport.SetContent(lipgloss.NewStyle().Width(m.viewport.Width).Render(content))
+				m.viewport.GotoBottom()
+			}
+		}
+		return m, tickEvery(100 * time.Millisecond)
+
+	// Handle async chat responses
+	case chatResponseMsg:
+		m.isThinking = false // Stop thinking indicator
+
+		if msg.err != nil {
+			errorMsg := llm.Message{Role: "error", Content: msg.err.Error()}
+			m.bot.MessageManager.AddMessage(errorMsg)
+		} else if msg.response != nil {
+			m.handleChatResponse(*msg.response)
+		}
+
+		// Update viewport to show the final state
+		m.viewport.SetContent(lipgloss.NewStyle().Width(m.viewport.Width).Render(strings.Join(m.bot.MessageManager.StyledMessages(), "\n")))
+		m.viewport.GotoBottom()
+		// Update tab names to reflect final token count
+		m.updateTabNames()
 
 	// We handle errors just like any other message
 	case errMsg:

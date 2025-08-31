@@ -242,3 +242,58 @@ func (b *Bot) InitializeModelManager(apiEndpoint string, initialModel string) er
 func (b *Bot) HasValidConnection() bool {
 	return b.ModelManager != nil
 }
+
+// SendMessageWithoutAdding sends a message to the LLM without adding the user message to the history
+// This is useful when the caller has already added the user message to the MessageManager
+func (b *Bot) SendMessageWithoutAdding(ctx context.Context, role, message string) (*llm.Answer, error) {
+	var msgsForSending []llm.Message
+	var err error
+	msg := llm.Message{Role: role, Content: message}
+
+	// Get existing messages and add the new message only for this request
+	msgsForSending, err = b.MessageManager.MessagesForSending()
+	msgsForSending = append(msgsForSending, msg)
+
+	query := llm.Query{
+		Model:    b.ModelManager.CurrentModel(),
+		Messages: msgsForSending,
+		Options: llm.SetOptions(map[string]any{
+			option.Temperature:   0.5,
+			option.RepeatLastN:   2,
+			option.RepeatPenalty: 2.0,
+			option.Verbose:       false,
+		}),
+	}
+
+	// Note: We don't add the message to MessageManager here since caller already did
+
+	var ans llm.Answer
+	ans, err = completion.Chat(b.ollamaUrl, query)
+	if err != nil {
+		return nil, err
+	}
+
+	return &ans, nil
+}
+
+// SendRAGMessageWithoutAdding sends a RAG-enhanced message without adding the user message to history
+func (b *Bot) SendRAGMessageWithoutAdding(ctx context.Context, role, message, chromaDBURL string) (*llm.Answer, error) {
+	// First, search ChromaDB for relevant context
+	ragContext, err := b.searchChromaDB(chromaDBURL, message)
+	if err != nil {
+		// If RAG search fails, fall back to regular message but add a note
+		contextualMessage := fmt.Sprintf("(RAG search failed: %v)\n\n%s", err, message)
+		return b.SendMessageWithoutAdding(ctx, role, contextualMessage)
+	}
+
+	// Enhance the message with RAG context
+	var enhancedMessage string
+	if ragContext != "" {
+		enhancedMessage = fmt.Sprintf("Context from knowledge base:\n%s\n\nUser question: %s", ragContext, message)
+	} else {
+		enhancedMessage = fmt.Sprintf("(No relevant context found in knowledge base)\n\nUser question: %s", message)
+	}
+
+	// Send the enhanced message
+	return b.SendMessageWithoutAdding(ctx, role, enhancedMessage)
+}

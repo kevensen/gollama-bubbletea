@@ -103,7 +103,7 @@ func (m *Manager) StyledMessages() []string {
 	slices.Sort(intKeys)
 
 	// Convert back to strings and process messages in correct order
-	for _, intKey := range intKeys {
+	for i, intKey := range intKeys {
 		key := strconv.Itoa(intKey)
 		msg, err := m.history.Get(key)
 		if err != nil {
@@ -127,6 +127,16 @@ func (m *Manager) StyledMessages() []string {
 		roleStyled = lipgloss.NewStyle().Foreground(c).Render(role)
 		msgStyled := roleStyled + ": " + msg.Content
 		messages = append(messages, msgStyled)
+
+		// Add extra spacing after assistant messages when followed by a user message
+		if msg.Role == "assistant" && i < len(intKeys)-1 {
+			// Check if the next message is from user
+			nextKey := strconv.Itoa(intKeys[i+1])
+			nextMsg, err := m.history.Get(nextKey)
+			if err == nil && nextMsg.Role == "user" {
+				messages = append(messages, "") // Add blank line
+			}
+		}
 	}
 	return messages
 }
